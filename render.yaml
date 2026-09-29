@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: smart-attendance
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn --bind 0.0.0.0:$PORT --workers 3 app:app
+    envVars:
+      - key: FLASK_ENV
+        value: production
+      - key: ATTENDANCE_SECRET
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false

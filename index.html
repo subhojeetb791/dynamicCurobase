@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Dynamic Attendance App — Smart School Management</title>
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#0f1f3c">
+<meta name="backend-url" content="">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Attendance">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<link rel="icon" type="image/png" href="/static/icon-192.png">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Poppins:wght@600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<!-- LOGIN SCREEN -->
+<div id="loginScreen" class="login-screen">
+  <div class="login-left">
+    <div class="login-flag">🇮🇳 Government School Initiative</div>
+    <div class="login-illust">
+      <div class="school-icon">🎓</div>
+      <div class="school-building">🏫</div>
+      <div class="floating-icons"><span>📚</span><span>✏️</span><span>🎒</span><span>🏆</span></div>
+    </div>
+    <h1>Dynamic Attendance App</h1>
+    <p class="sub">Smart School Management System</p>
+    <p class="tagline">Better Attendance, Brighter Future ✨</p>
+    <ul class="login-features">
+      <li>✅ Daily Attendance with QR & Manual</li>
+      <li>📊 Monthly Reports — Excel & PDF</li>
+      <li>🏫 Classes 1–12 with Sections</li>
+      <li>🇮🇳 Govt. School Ready</li>
+    </ul>
+  </div>
+  <div class="login-right">
+    <form id="loginForm" class="login-card" onsubmit="doLogin(event)">
+      <h2>Welcome Back! 👋</h2>
+      <p class="muted">Login to your account</p>
+      <div id="loginSchoolInfo" class="login-school-info">
+        <img id="loginLogo" src="" alt="" class="hidden" style="height:48px;border-radius:8px;margin-bottom:8px">
+        <div id="loginSchoolName" style="font-weight:700;color:var(--navy)">Dynamic Attendance App</div>
+        <small class="muted">Smart School Management System</small>
+      </div>
+      <label>Role <small class="muted">(for reference, auth uses account role)</small></label>
+      <select id="loginRole"><option value="admin">Admin</option><option value="teacher">Teacher</option><option value="student">Student</option><option value="parent">Parent</option></select>
+      <label>Username *</label>
+      <input id="loginUser" placeholder="e.g. admin" value="admin" required autocomplete="username">
+      <label>Password *</label>
+      <div class="pwd-wrap"><input id="loginPass" type="password" placeholder="••••••••" value="admin123" required autocomplete="current-password"><button type="button" onclick="togglePwd()" tabindex="-1">👁️</button></div>
+      <div class="login-row"><label class="check"><input type="checkbox" id="rememberMe" checked> Remember Me</label><a href="#" onclick="toast('Contact Admin for reset');return false">Forgot Password?</a></div>
+      <button id="loginBtn" type="submit" class="btn-primary btn-block">Login →</button>
+      <p class="login-hint">Demo: <b>admin/admin123</b> | <b>teacher/teacher123</b> | <b>student/student123</b> | <b>parent/parent123</b></p>
+      <p id="loginMsg" class="warn"></p>
+      <p class="muted sm">Not a member? <a href="#">Contact Admin</a></p>
+    </form>
+  </div>
+</div>
+
+<!-- APP SHELL -->
+<div id="appShell" class="hidden">
+  <!-- SIDEBAR -->
+  <aside id="sidebar">
+    <div class="sidebar-head">
+      <div class="logo-box" id="sidebarLogo">🎓</div>
+      <div>
+        <div class="brand-title">Dynamic Attendance</div>
+        <div class="brand-sub">Smart School System</div>
+      </div>
+      <span class="flag-mini">🇮🇳</span>
+    </div>
+    <nav id="nav">
+      <button data-view="dashboard" class="active"><span class="ico">📊</span> Dashboard</button>
+      <button data-view="students"><span class="ico">👥</span> Students</button>
+      <button data-view="teachers"><span class="ico">🎓</span> Teachers</button>
+      <button data-view="classes"><span class="ico">🏫</span> Classes</button>
+      <button data-view="attendance"><span class="ico">📋</span> Attendance</button>
+      <button data-view="calendar"><span class="ico">📅</span> Calendar</button>
+      <button data-view="reports"><span class="ico">📄</span> Reports</button>
+      <button data-view="analytics"><span class="ico">📊</span> Analytics</button>
+      <button data-view="notices"><span class="ico">📢</span> Notices</button>
+      <button data-view="notifications"><span class="ico">🔔</span> Notifications</button>
+      <button data-view="settings"><span class="ico">⚙️</span> Settings</button>
+    </nav>
+    <div class="nav-section-label">Quick Access</div>
+    <nav class="nav-mini">
+      <button data-view="staff"><span class="ico">👩‍🏫</span> Staff</button>
+      <button data-view="parents"><span class="ico">👨‍👩‍👧</span> Parents</button>
+      <button data-view="messages"><span class="ico">💬</span> Messages</button>
+      <button data-view="holidays"><span class="ico">📅</span> Holidays</button>
+      <button data-view="datesheet"><span class="ico">📋</span> Date Sheet</button>
+      <button data-view="timetable"><span class="ico">🕒</span> Timetable</button>
+      <button data-view="heatmap"><span class="ico">🗺️</span> Heatmap</button>
+      <button data-view="studentid"><span class="ico">🪪</span> Student ID</button>
+      <button data-view="reviews"><span class="ico">🆘</span> Reviews</button>
+      <button data-view="qr">🔳 QR Attendance</button>
+      <button data-view="monthly">📆 Monthly</button>
+      <button data-view="enotes">📚 E-Notes</button>
+      <button data-view="features">✨ All Features</button>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="online"><span class="dot"></span> Online</div>
+      <div class="mode">🏫 School Mode</div>
+      <button class="btn-ghost" onclick="logout()">↪ Logout</button>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <div id="mainWrap">
+    <header id="topbar">
+      <button id="menuBtn" class="icon-btn">☰</button>
+      <div id="topbarLogo" class="topbar-logo hidden"><img src="" alt="logo"></div>
+      <div class="search-wrap"><span>🔍</span><input id="globalSearch" placeholder="Search student, roll no, ID, teacher, class..." oninput="globalSearch()"></div>
+      <div class="top-right">
+        <div class="school-name"><span id="topSchoolName">Smart Attendance</span> <span id="topSession" class="session-badge">2026–27</span><span>🇮🇳 Govt. Recognised</span></div>
+        <span id="roleBadge" class="role-badge">Admin</span>
+        <button class="icon-btn bell" onclick="toggleNotifPanel(event)">🔔<span id="bellDot" class="bell-dot"></span><span id="notifCount" class="hidden" style="position:absolute;top:2px;right:2px;background:var(--red);color:#fff;font-size:10px;border-radius:999px;padding:0 5px"></span></button>
+        <div id="notifPanel" class="notif-panel hidden"></div>
+        <div class="profile" onclick="toggleProfile()">
+          <img id="topAvatar" src="https://i.pravatar.cc/100?img=15" alt="">
+          <div><b id="topName">Mr. Sharma</b><small id="topRole">Teacher</small></div>
+          <span>▾</span>
+          <div id="profileDrop" class="profile-drop hidden">
+            <div class="pd-head"><b id="pdName">Mr. Sharma</b><small id="pdRole">Teacher • Green Valley</small></div>
+            <button onclick="navigate('settings')">⚙️ Settings</button>
+            <button onclick="logout()">↪ Logout</button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <main id="content">
+      <!-- DASHBOARD -->
+      <section class="view active" id="view-dashboard">
+        <div class="page-head"><div><h2>Dashboard</h2><p>Welcome back, <span id="dashTeacher">Admin</span>! Academic Session: <b id="dashSession">2026–27</b></p></div><div class="page-actions"><button class="btn-outline" onclick="loadDashboard()">⟳ Refresh</button><span id="todayBadge" class="badge-date"></span></div></div>
+        <div class="stat-grid six">
+          <div class="stat-card blue"><div class="stat-icon">👥</div><div><small>Total Students</small><b id="kpiTotal">-</b><span class="trend up" id="kpiTotalSub"></span></div></div>
+          <div class="stat-card green"><div class="stat-icon">✅</div><div><small>Present Today</small><b id="kpiPresent">-</b></div></div>
+          <div class="stat-card red"><div class="stat-icon">❌</div><div><small>Absent Today</small><b id="kpiAbsent">-</b></div></div>
+          <div class="stat-card blue"><div class="stat-icon">📊</div><div><small>Attendance Rate</small><b id="kpiRate">-</b></div></div>
+          <div class="stat-card yellow"><div class="stat-icon">🟡</div><div><small>Late Today</small><b id="kpiLate">-</b></div></div>
+          <div class="stat-card blue"><div class="stat-icon">🏫</div><div><small>Classes Active</small><b id="kpiClasses">-</b></div></div>
+        </div>
+        <div class="stat-grid" style="margin-top:12px">
+          <div class="stat-card yellow"><div class="stat-icon">🟡</div><div><small>Leave Today</small><b id="kpiLeave">-</b></div></div>
+          <div class="stat-card blue"><div class="stat-icon">👩‍🏫</div><div><small>Total Teachers</small><b id="kpiTeachers">-</b></div></div>
+        </div>
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-head"><h3>Attendance Overview</h3><span class="live">● Live</span></div>
+            <div class="attendance-overview">
+              <div class="donut-wrap"><div id="donut" class="donut" style="--p:93"><span>93%</span></div></div>
+              <ul class="legend">
+                <li><span class="dot g"></span> Present <b id="legP">-</b></li>
+                <li><span class="dot r"></span> Absent <b id="legA">-</b></li>
+                <li><span class="dot y"></span> Late <b id="legT">-</b></li>
+                <li><span class="dot n" style="background:#3b82f6"></span> Leave <b id="legL">-</b></li>
+                <li><span class="dot n"></span> Not Marked <b id="legN">0</b></li>
+              </ul>
+            </div>
+            <div id="weeklyChart" class="chart-bar" style="margin-top:12px"></div>
+            <small class="muted">Weekly attendance % (last 7 days)</small>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3>Quick Actions</h3></div>
+            <div class="quick-grid">
+              <button class="qa qa-blue" onclick="navigate('attendance')"><span>✅</span> Mark Attendance</button>
+              <button class="qa qa-green" onclick="navigate('students');openStudentModal()"><span>➕</span> Add Student</button>
+              <button class="qa qa-purple" onclick="navigate('reports')"><span>📑</span> View Reports</button>
+              <button class="qa qa-navy" onclick="navigate('classes')"><span>🏫</span> Manage Classes</button>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3>Today's Attendance — Class Wise</h3><input type="date" id="dashDate" onchange="loadDashboard()"></div>
+          <div id="todayClasses" class="class-bars"></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3>🏫 SMART SCHOOL COMMAND CENTER</h3><button class="btn-outline" onclick="loadCommandCenter()">Refresh Insights</button></div>
+          <div class="grid-2">
+            <div><h4>🧠 Smart Insights</h4><div id="ccInsights" class="notice-grid"></div></div>
+            <div><h4>🔔 Alerts</h4><div id="ccAlerts" class="notice-grid"></div></div>
+          </div>
+          <div class="grid-2" style="margin-top:12px">
+            <div><h4>🏆 Achievements</h4><div id="ccBadges" class="notice-grid"></div></div>
+            <div><h4>📅 Today's Timetable</h4><div id="ccTimetable" class="table-wrap"></div></div>
+          </div>
+          <div class="card-head" style="margin-top:12px"><h4>🎯 My Attendance Goal</h4></div>
+          <div id="ccGoal" class="muted">Login as student/parent to see goal, or select student in Students.</div>
+        </div>
+        <div class="grid-2">
+          <div class="card"><div class="card-head"><h3>🟢 Online • School Database</h3></div><div id="schoolInfo" class="muted"></div></div>
+          <div class="card"><div class="card-head"><h3>🇮🇳 Government School Dashboard</h3></div><p class="muted">Centralized attendance & management for Classes 1–12. Offline-capable, QR-enabled, WhatsApp integrated.</p></div>
+        </div>
+      </section>
+
+      <!-- STUDENTS -->
+      <section class="view" id="view-students">
+        <div class="page-head"><div><h2>Students</h2><p>Manage all student profiles</p></div><button class="btn-primary" onclick="openStudentModal()">+ Add Student</button></div>
+        <div class="card toolbar"><input id="s_q" placeholder="🔍 Search by name, ID or roll number" oninput="loadStudents()"><select id="s_class" onchange="filterSection('#s_section');loadStudents()"></select><select id="s_section" onchange="loadStudents()"></select><button class="btn-outline" onclick="loadStudents()">Filter</button></div>
+        <div class="card"><div id="studentsTable" class="table-wrap"></div></div>
+      </section>
+
+      <!-- ATTENDANCE -->
+      <section class="view" id="view-attendance">
+        <div class="page-head"><div><h2>Mark Attendance</h2><p id="attWeekday" class="muted"></p></div><span id="holidayWarn" class="pill warn hidden"></span></div>
+        <div class="card toolbar">
+          <select id="attSession" title="Academic Session"></select>
+          <input type="date" id="attDate" onchange="loadAttendance()" aria-label="Date">
+          <select id="attClass" onchange="filterSection('#attSection');loadAttendance()" aria-label="Class"></select>
+          <select id="attSection" onchange="loadAttendance()" aria-label="Section"></select>
+          <select id="attSubject" onchange="loadAttendance()" aria-label="Subject"><option value="">All Subjects</option></select>
+          <input id="attSearch" placeholder="Search student..." oninput="loadAttendance()" aria-label="Search student" style="min-width:140px">
+          <div class="btn-group"><button class="btn-outline" onclick="attNav(-1)">‹ Prev</button><button class="btn-outline" onclick="attToday()">Today</button><button class="btn-outline" onclick="attNav(1)">Next ›</button></div>
+        </div>
+        <div class="legend-row"><span class="pill g">🟢 Present (P)</span><span class="pill r">🔴 Absent (A)</span><span class="pill t">🟡 Late (T)</span><span class="pill n">🔵 Leave (L)</span></div>
+        <div class="card toolbar">
+          <button class="btn-green" onclick="markAll('P')">Mark All Present</button>
+          <button class="btn-red" onclick="markAll('A')">Mark All Absent</button>
+          <button class="btn-outline" onclick="resetAttendance()">Reset</button>
+          <span class="muted" id="attCount"></span>
+          <span id="offlineBadge" class="pill warn hidden">Offline Mode</span>
+        </div>
+        <div id="attSummary" class="stat-grid small"></div>
+        <div class="card"><div id="attTable" class="table-wrap"></div><div class="sticky-actions"><button class="btn-primary" onclick="confirmSaveAttendance()">💾 Save Attendance</button><button class="btn-green" onclick="completeAttendance()">✅ Complete & Share WhatsApp</button></div></div>
+        <div class="card"><h3>QR / Manual Scan</h3><div class="toolbar"><input id="scanCode" placeholder="Student ID / Scan QR"><select id="scanStatus"><option value="P">Present</option><option value="A">Absent</option><option value="T">Late</option><option value="L">Leave</option></select><button class="btn-primary" onclick="scanAttendance()">Mark</button></div></div>
+      </section>
+      <!-- CALENDAR -->
+      <section class="view" id="view-calendar">
+        <div class="page-head"><div><h2>Attendance Calendar</h2><p>Click a date for details</p></div></div>
+        <div class="card toolbar"><input type="month" id="calMonth"><select id="calClass"></select><select id="calSection"></select><button class="btn-primary" onclick="loadCalendar()">Load</button></div>
+        <div class="card"><div id="calGrid" class="calendar-grid"></div><div id="calDetail" class="muted" style="margin-top:12px"></div></div>
+      </section>
+      <!-- ANALYTICS -->
+      <section class="view" id="view-analytics">
+        <div class="page-head"><div><h2>Analytics</h2></div></div>
+        <div class="card toolbar"><select id="anaClass"></select><select id="anaSection"></select><button class="btn-primary" onclick="loadAnalytics()">Load</button></div>
+        <div class="grid-2">
+          <div class="card"><h3>Weekly Trend</h3><div id="anaWeekly" class="chart-bar"></div></div>
+          <div class="card"><h3>Monthly Trend</h3><div id="anaMonthly" class="chart-bar"></div></div>
+        </div>
+        <div class="grid-2">
+          <div class="card"><h3>⚠️ Low Attendance (&lt;75%)</h3><div id="anaLow" class="table-wrap"></div></div>
+          <div class="card"><h3>🏆 High Attendance (≥95%)</h3><div id="anaHigh" class="table-wrap"></div></div>
+        </div>
+        <div class="card"><h3>Audit Log (who marked/edited)</h3><div id="auditTable" class="table-wrap"></div></div>
+      </section>
+      <!-- NOTIFICATIONS -->
+      <section class="view" id="view-notifications">
+        <div class="page-head"><div><h2>Notifications</h2></div><button class="btn-outline" onclick="markAllRead()">Mark all read</button></div>
+        <div id="notifList" class="notice-grid"></div>
+      </section>
+      <!-- TEACHERS -->
+      <section class="view" id="view-teachers">
+        <div class="page-head"><div><h2>Teacher Management</h2></div><button class="btn-primary" onclick="document.getElementById('teacherModal').classList.add('open')">+ Add Teacher</button></div>
+        <div class="card toolbar"><input id="t_q" placeholder="Search teacher..." oninput="loadTeachers()"></div>
+        <div id="teachersTable" class="table-wrap card"></div>
+      </section>
+      <!-- TIMETABLE -->
+      <section class="view" id="view-timetable">
+        <div class="page-head"><div><h2>Smart Timetable</h2><p>Click Mark Attendance to auto-load class/subject</p></div></div>
+        <div class="card toolbar"><select id="ttDay"><option>Monday</option><option>Tuesday</option><option>Wednesday</option><option>Thursday</option><option>Friday</option><option>Saturday</option></select><button class="btn-primary" onclick="loadTimetable()">Load</button></div>
+        <div id="ttTable" class="table-wrap card"></div>
+        <div class="card" style="margin-top:12px"><h4>Add Period (Admin)</h4><div class="toolbar"><input id="ttTime" type="time" value="09:00"><input id="ttSubject" placeholder="Subject"><select id="ttClass"></select><select id="ttSection"></select><input id="ttRoom" placeholder="Room"><button class="btn-primary" onclick="addTimetable()">Add</button></div></div>
+      </section>
+      <!-- HEATMAP -->
+      <section class="view" id="view-heatmap">
+        <div class="page-head"><div><h2>Attendance Heatmap</h2><p>🟢 High ≥90 • 🟡 Medium 75-89 • 🔴 Low &lt;75</p></div></div>
+        <div class="card toolbar"><input type="month" id="heatMonth"><select id="heatSection"></select><button class="btn-primary" onclick="loadHeatmap()">Load</button></div>
+        <div id="heatGrid" class="table-wrap card"></div>
+      </section>
+      <!-- STUDENT ID -->
+      <section class="view" id="view-studentid">
+        <div class="page-head"><div><h2>Digital Student ID</h2></div></div>
+        <div class="card toolbar"><select id="idStudent"></select><button class="btn-primary" onclick="loadIdCard()">Show ID</button></div>
+        <div id="idCard" class="card" style="max-width:340px;text-align:center"></div>
+      </section>
+      <!-- REVIEWS -->
+      <section class="view" id="view-reviews">
+        <div class="page-head"><div><h2>Attendance Review Requests</h2><p>Students/parents request, teacher/admin approves</p></div></div>
+        <div class="card toolbar"><input type="date" id="revDate"><input id="revReason" placeholder="Reason for correction"><button class="btn-primary" onclick="submitReview()">Submit Request</button></div>
+        <div id="revTable" class="table-wrap card"></div>
+      </section>
+
+      <!-- MONTHLY -->
+      <section class="view" id="view-monthly">
+        <div class="page-head"><div><h2>Monthly Attendance</h2></div><div class="btn-group"><button class="btn-green" onclick="exportMonthly('excel')">📗 Export Excel</button><button class="btn-red" onclick="exportMonthly('pdf')">📕 Export PDF</button></div></div>
+        <div class="card toolbar"><input type="month" id="monMonth"><select id="monClass" onchange="filterSection('#monSection')"></select><select id="monSection"></select><button class="btn-primary" onclick="loadMonthly()">Generate Report</button></div>
+        <div id="monStats" class="stat-grid small"></div>
+        <div class="card"><div id="monTable" class="table-wrap"></div><div id="monInfo" class="muted"></div></div>
+      </section>
+
+      <!-- CLASSES -->
+      <section class="view" id="view-classes">
+        <div class="page-head"><div><h2>Classes & Sections</h2><p>Classes 1–12 • Section-wise management</p></div><div class="toolbar"><input id="newClass" placeholder="Class name e.g. 13"><button class="btn-primary" onclick="addClass()">+ Add Class</button></div></div>
+        <div class="card toolbar"><select id="secClass"></select><select id="newSec"><option value="">Select Section</option><option>A</option><option>B</option><option>C</option><option>D</option><option>E</option><option>F</option><option>G</option><option>H</option><option>I</option><option>J</option><option>K</option></select><button class="btn-outline" onclick="addSection()">+ Add Section</button><button class="btn-green" onclick="addSectionsAK()">＋ Add A-K</button><small class="muted">Sections A to K available</small></div>
+        <div id="classGrid" class="class-grid"></div>
+        <div id="sectionList" class="card"></div>
+      </section>
+
+      <!-- STAFF -->
+      <section class="view" id="view-staff">
+        <div class="page-head"><div><h2>Staff / Teacher Management</h2></div><button class="btn-primary" onclick="document.getElementById('staffModal').classList.add('open')">+ Add Staff</button></div>
+        <div id="staffGrid" class="staff-grid"></div>
+      </section>
+      <!-- PARENTS -->
+      <section class="view" id="view-parents">
+        <div class="page-head"><div><h2>Parent Management</h2><p>Link parents with students</p></div><button class="btn-primary" onclick="document.getElementById('parentModal').classList.add('open')">+ Add Parent</button></div>
+        <div class="card toolbar"><select id="parStudent"></select></div>
+        <div id="parentsTable" class="table-wrap card"></div>
+      </section>
+
+      <!-- MESSAGES -->
+      <section class="view" id="view-messages">
+        <div class="page-head"><h2>Messages & WhatsApp Groups</h2></div>
+        <div class="card toolbar"><select id="waClass"></select><select id="waSection"></select><input id="waLink" placeholder="https://chat.whatsapp.com/..."><button class="btn-green" onclick="saveWhatsApp()">Save Group</button></div>
+        <div id="waList" class="table-wrap card"></div>
+      </section>
+
+      <!-- HOLIDAYS -->
+      <section class="view" id="view-holidays">
+        <div class="page-head"><h2>Holidays</h2><p>Government & custom holidays — Sundays auto-holiday</p></div>
+        <div class="card toolbar"><input type="date" id="holDate"><input id="holName" placeholder="Holiday name"><select id="holType"><option>Government</option><option>Custom</option><option>School Day</option></select><button class="btn-primary" onclick="addHoliday()">Add</button></div>
+        <div id="holidayTable" class="table-wrap card"></div>
+      </section>
+
+      <!-- DATESHEET -->
+      <section class="view" id="view-datesheet">
+        <div class="page-head"><h2>Date Sheet</h2></div>
+        <div class="card toolbar"><select id="dsClass"></select><select id="dsExam"><option>Unit Test 1</option><option>Unit Test 2</option><option>Mid-Term</option><option>Final-Term</option><option>Pre-Board</option></select><input id="dsSubject" placeholder="Subject"><input type="date" id="dsDate"><input type="time" id="dsTime"><button class="btn-primary" onclick="addDateSheet()">Add</button></div>
+        <div id="dsTable" class="table-wrap card"></div>
+      </section>
+
+      <!-- REPORTS -->
+      <section class="view" id="view-reports">
+        <div class="page-head"><h2>Reports</h2></div>
+        <div class="grid-2">
+          <div class="card feature"><h3>📆 Monthly Report</h3><p>Class & section wise with working days</p><button class="btn-primary" onclick="navigate('monthly')">Open Monthly</button></div>
+          <div class="card feature"><h3>📝 Examination Report</h3><p>Marks & percentages</p><div class="toolbar"><select id="repClass"></select><select id="repExam"><option>Unit Test 1</option><option>Unit Test 2</option><option>Mid-Term</option><option>Final-Term</option><option>Pre-Board</option></select><button class="btn-outline" onclick="loadMarksReport()">Load</button></div></div>
+        </div>
+        <div id="marksReport" class="table-wrap card"></div>
+        <div class="card"><div class="toolbar"><input id="newSubject" placeholder="New subject"><button class="btn-outline" onclick="addSubject()">Add Subject</button><span id="subjectChips"></span></div></div>
+      </section>
+
+      <!-- QR -->
+      <section class="view" id="view-qr">
+        <div class="page-head"><h2>QR Attendance</h2></div>
+        <div class="grid-2">
+          <div class="card qr-card"><h3>Generate / Show QR</h3><div class="toolbar"><input id="qrStudentId" placeholder="Student ID e.g. STU001"><button class="btn-primary" onclick="showQR()">Show QR</button></div><div id="qrDisplay" class="qr-display"></div><div class="btn-group"><button class="btn-navy" onclick="document.getElementById('qrStudentId').value && showQR()">🔳 Generate QR</button><button class="btn-outline" onclick="scanAttendance()">Manual</button></div></div>
+          <div class="card"><h3>How it works</h3><ol class="muted"><li>Open student profile → Show QR</li><li>Scan with device camera</li><li>Auto-mark Present/Absent/Leave</li></ol><div class="scan-success hidden" id="scanSuccess">✅ Scan Successful!</div></div>
+        </div>
+        <div class="card" style="margin-top:12px"><h3>⏱️ Temporary Class QR (expires, anti-duplicate)</h3>
+          <div class="toolbar"><select id="qrTmpClass"></select><select id="qrTmpSection"></select><select id="qrTmpSubject"><option value="">No subject</option></select><button class="btn-primary" onclick="createTempQR()">Generate Temporary QR (5 min)</button></div>
+          <div id="qrTempDisplay" class="qr-display"></div>
+          <div class="toolbar"><input id="qrTempToken" placeholder="Paste QR token"><input id="qrTempCode" placeholder="Student ID"><button class="btn-green" onclick="scanTempQR()">Verify & Mark</button></div>
+        </div>
+      </section>
+
+      <!-- ADDITIONAL FEATURES -->
+      <section class="view" id="view-features">
+        <div class="page-head"><h2>Additional Features</h2></div>
+        <div class="feature-grid">
+          <div class="feat-card" onclick="navigate('notices')"><span>📢</span><h4>Notice Board</h4><p>School announcements</p></div>
+          <div class="feat-card" onclick="navigate('enotes')"><span>📚</span><h4>E-Notes</h4><p>Digital learning content</p></div>
+          <div class="feat-card" onclick="navigate('meals')"><span>🍱</span><h4>Mid-Day Meal</h4><p>Govt. meal management</p></div>
+          <div class="feat-card" onclick="navigate('scholarship')"><span>🎓</span><h4>Scholarship & DBT</h4><p>Student records</p></div>
+          <div class="feat-card" onclick="navigate('complaints')"><span>📝</span><h4>Complaint Box</h4><p>Feedback & grievances</p></div>
+          <div class="feat-card" onclick="navigate('datesheet')"><span>📅</span><h4>Date Sheet</h4><p>Exam schedules</p></div>
+          <div class="feat-card" onclick="navigate('messages')"><span>💬</span><h4>Messages</h4><p>WhatsApp groups</p></div>
+          <div class="feat-card" onclick="navigate('settings')"><span>⚙️</span><h4>Settings & Branding</h4><p>School configuration</p></div>
+        </div>
+      </section>
+
+      <!-- NOTICES -->
+      <section class="view" id="view-notices">
+        <div class="page-head"><h2>Notice Board</h2></div>
+        <div class="card toolbar"><input id="noticeTitle" placeholder="Title"><input id="noticeContent" placeholder="Content"><button class="btn-primary" onclick="addNotice()">Post Notice</button></div>
+        <div id="noticeList" class="notice-grid"></div>
+      </section>
+      <section class="view" id="view-enotes">
+        <div class="page-head"><h2>E-Notes</h2></div>
+        <div class="card toolbar"><input id="noteTitle" placeholder="Title"><input id="noteSubject" placeholder="Subject"><input id="noteContent" placeholder="Content / Link"><button class="btn-primary" onclick="addENote()">Add Note</button></div>
+        <div id="enoteList" class="card-grid"></div>
+      </section>
+      <section class="view" id="view-meals">
+        <div class="page-head"><h2>Mid-Day Meal</h2></div>
+        <div class="card toolbar"><input type="date" id="mealDate"><select id="mealClass"></select><input id="mealCount" type="number" placeholder="Students"><input id="mealMenu" placeholder="Menu"><button class="btn-primary" onclick="addMeal()">Add</button></div>
+        <div id="mealTable" class="table-wrap card"></div>
+      </section>
+      <section class="view" id="view-scholarship">
+        <div class="page-head"><h2>Scholarship & DBT</h2></div>
+        <div class="card toolbar"><select id="schStudent"></select><input id="schScheme" placeholder="Scheme"><input id="schAmount" type="number" placeholder="Amount"><select id="schStatus"><option>Pending</option><option>Approved</option><option>Disbursed</option></select><button class="btn-primary" onclick="addScholarship()">Add</button></div>
+        <div id="schTable" class="table-wrap card"></div>
+      </section>
+      <section class="view" id="view-complaints">
+        <div class="page-head"><h2>Complaint Box</h2></div>
+        <div class="card toolbar"><input id="compName" placeholder="Your name"><input id="compText" placeholder="Complaint"><button class="btn-primary" onclick="addComplaint()">Submit</button></div>
+        <div id="compTable" class="table-wrap card"></div>
+      </section>
+
+      <!-- SETTINGS -->
+      <section class="view" id="view-settings">
+        <div class="page-head"><h2>Settings & Security</h2></div>
+        <div class="grid-2">
+          <div class="card"><h3>🏫 School Settings</h3><label>School Name</label><input id="setSchoolName"><label>Branding Color</label><input id="setColor" type="color"><label>Address</label><input id="setAddress" placeholder="School Address"><label>Contact</label><input id="setContact" placeholder="Phone">
+            <div class="logo-upload-card">
+              <h4>🎨 School Logo</h4>
+              <div id="logoPreview" class="logo-preview"><span class="muted">No logo uploaded — shows 🎓</span></div>
+              <div class="logo-actions">
+                <label class="btn-outline logo-choose">📁 Choose File<input type="file" id="logoFile" accept="image/png,image/jpeg,image/webp" hidden onchange="previewLogo(this)"></label>
+                <button class="btn-primary" onclick="uploadLogo()">⬆️ Upload Logo</button>
+                <button class="btn-ghost" onclick="removeLogo()" style="color:var(--red)">🗑️ Remove</button>
+              </div>
+              <small class="muted">PNG/JPG/WebP, max 2MB. Shows in sidebar & topbar instantly.</small>
+              <div id="logoLocalPreview" class="hidden" style="margin-top:8px"><img id="logoLocalImg" style="height:60px;border-radius:10px;border:1px solid #e2e8f0"></div>
+            </div>
+            <button class="btn-primary" onclick="saveSettings()" style="margin-top:12px">Save Settings</button></div>
+          <div class="card"><h3>🔐 Security</h3><div class="setting-row"><span>Password Policy</span><label class="switch"><input type="checkbox" checked><span></span></label></div><div class="setting-row"><span>OTP Verification</span><label class="switch"><input type="checkbox"><span></span></label></div><div class="setting-row"><span>Saved Login</span><label class="switch"><input type="checkbox" checked><span></span></label></div><div class="setting-row"><span>Login Security</span><label class="switch"><input type="checkbox" checked><span></span></label></div><hr><h4>Roles & Permissions</h4><div id="permGrid" class="perm-grid"></div></div>
+        </div>
+        <div class="grid-2">
+          <div class="card"><h3>Users & Roles</h3><div class="toolbar"><input id="uName" placeholder="Username"><input id="uPass" type="password" placeholder="Password"><select id="uRole"><option>admin</option><option>teacher</option><option>student</option><option>parent</option></select><button class="btn-primary" onclick="addUser()">Create</button></div><div id="userTable" class="table-wrap"></div></div>
+          <div class="card"><h3>Login History</h3><div id="loginHistory" class="table-wrap"></div></div>
+        </div>
+      </section>
+
+      <!-- MARKS INLINE FOR SETTINGS COMPAT -->
+      <div id="marksEntry" class="card hidden"><h3>Enter Marks for <span id="marksStudentName"></span></h3><div id="marksInputs"></div><button class="btn-primary" onclick="saveMarks()">Save Marks</button></div>
+
+      <!-- ACCESS DENIED -->
+      <section class="view" id="view-denied">
+        <div class="card" style="text-align:center;padding:40px">
+          <div style="font-size:48px">🔒</div>
+          <h2>Access Denied</h2>
+          <p class="muted">You don't have permission to access this feature. Your role: <b id="deniedRole">-</b></p>
+          <p class="muted">Please contact Admin if you need access.</p>
+          <button class="btn-primary" onclick="navigate('dashboard')">← Back to Dashboard</button>
+        </div>
+      </section>
+      <!-- 404 -->
+      <section class="view" id="view-404">
+        <div class="card" style="text-align:center;padding:40px">
+          <div style="font-size:48px">🔍</div>
+          <h2>Page not found</h2>
+          <p class="muted">The page you requested does not exist.</p>
+          <button class="btn-primary" onclick="navigate('dashboard')">← Back to Dashboard</button>
+        </div>
+      </section>
+      <!-- NETWORK ERROR -->
+      <section class="view" id="view-offline">
+        <div class="card" style="text-align:center;padding:40px">
+          <div style="font-size:48px">📡</div>
+          <h2>Unable to connect to the server</h2>
+          <p class="muted">Check your internet connection. Attendance actions are queued locally and will sync.</p>
+          <button class="btn-primary" onclick="location.reload()">Retry</button>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<!-- MODALS -->
+<div id="studentModal" class="modal"><div class="modal-content">
+  <div class="modal-head"><h3 id="studentModalTitle">Add Student</h3><button class="icon-btn" onclick="closeStudentModal()">✕</button></div>
+  <div class="form-grid">
+    <label>Full Name*<input id="f_name" placeholder="e.g. Aarav Sharma" aria-label="Full Name"></label>
+    <label>Student ID*<input id="f_student_id" placeholder="STU001" aria-label="Student ID"></label>
+    <label>Roll Number<input id="f_roll" placeholder="01" aria-label="Roll Number"></label>
+    <label>Admission Number<input id="f_admission" placeholder="ADM-2026-001" aria-label="Admission Number"></label>
+    <label>Class<select id="f_class" aria-label="Class"></select></label>
+    <label>Section<select id="f_section" aria-label="Section"></select></label>
+    <label>Date of Birth<input type="date" id="f_dob" aria-label="Date of Birth"></label>
+    <label>Gender<select id="f_gender" aria-label="Gender"><option value="">Select</option><option>Male</option><option>Female</option><option>Other</option></select></label>
+    <label>Father's Name<input id="f_father" aria-label="Father Name"></label>
+    <label>Mother's Name<input id="f_mother" aria-label="Mother Name"></label>
+    <label>Parent Name<input id="f_parentname" placeholder="Guardian name" aria-label="Parent Name"></label>
+    <label>Parent Contact<input id="f_parentcontact" placeholder="Parent phone" aria-label="Parent Contact"></label>
+    <label>Phone<input id="f_phone" aria-label="Phone"></label>
+    <label>Email<input id="f_email" placeholder="student@mail.com" aria-label="Email"></label>
+    <label>Address<input id="f_address" aria-label="Address"></label>
+    <label>Photo<input type="file" id="f_photo" accept="image/*" aria-label="Photo"></label>
+    <label>QR Preview<div id="qrPreview" class="qr-mini"></div></label>
+  </div>
+  <div class="modal-actions"><button class="btn-outline" onclick="closeStudentModal()">Cancel</button><button class="btn-primary" onclick="saveStudent()">💾 Save Student</button></div>
+  <p id="studentModalMsg" class="warn"></p>
+</div></div>
+
+<div id="staffModal" class="modal"><div class="modal-content small">
+  <div class="modal-head"><h3>Add Staff</h3><button class="icon-btn" onclick="document.getElementById('staffModal').classList.remove('open')">✕</button></div>
+  <label>Name<input id="staffName" placeholder="Mr. Verma"></label>
+  <label>Role / Subject<input id="staffRole" placeholder="Mathematics"></label>
+  <label>Phone<input id="staffPhone" placeholder="9876543210"></label>
+  <button class="btn-primary btn-block" onclick="addStaff();document.getElementById('staffModal').classList.remove('open')">Save</button>
+</div></div>
+<div id="parentModal" class="modal"><div class="modal-content small">
+  <div class="modal-head"><h3>Add Parent</h3><button class="icon-btn" onclick="document.getElementById('parentModal').classList.remove('open')">✕</button></div>
+  <label>Name<input id="parName" placeholder="Parent Name"></label>
+  <label>Phone<input id="parPhone" placeholder="9876500000"></label>
+  <label>Email<input id="parEmail" placeholder="parent@mail.com"></label>
+  <label>Link Student<select id="parStudentModal"></select></label>
+  <button class="btn-primary btn-block" onclick="addParent();document.getElementById('parentModal').classList.remove('open')">Save</button>
+</div></div>
+<div id="teacherModal" class="modal"><div class="modal-content small">
+  <div class="modal-head"><h3>Add Teacher</h3><button class="icon-btn" onclick="document.getElementById('teacherModal').classList.remove('open')">✕</button></div>
+  <label>Teacher ID<input id="t_id" placeholder="TCH001"></label>
+  <label>Name*<input id="t_name" placeholder="Mr. Sharma"></label>
+  <label>Email<input id="t_email" placeholder="teacher@school.edu"></label>
+  <label>Phone<input id="t_phone" placeholder="9876543210"></label>
+  <label>Subject<input id="t_subject" placeholder="Mathematics"></label>
+  <label>Assigned Class<input id="t_class" placeholder="10-A"></label>
+  <button class="btn-primary btn-block" onclick="addTeacher();document.getElementById('teacherModal').classList.remove('open')">Save</button>
+</div></div>
+<div id="confirmModal" class="modal"><div class="modal-content small">
+  <div class="modal-head"><h3>Confirm Save</h3></div>
+  <p id="confirmText">Save attendance?</p>
+  <div class="modal-actions"><button class="btn-outline" onclick="document.getElementById('confirmModal').classList.remove('open')">Cancel</button><button class="btn-primary" onclick="doSaveAttendance()">Confirm Save</button></div>
+</div></div>
+
+<!-- Mobile bottom navigation (student/parent/teacher focused) -->
+<nav id="mobileNav" aria-label="Mobile navigation">
+  <button data-mview="dashboard" class="active" onclick="navigate('dashboard')">🏠<span>Home</span></button>
+  <button data-mview="attendance" onclick="navigate('attendance')">✓<span>Attendance</span></button>
+  <button data-mview="timetable" onclick="navigate('timetable')">📅<span>Timetable</span></button>
+  <button data-mview="notifications" onclick="navigate('notifications')">🔔<span>Notices</span></button>
+  <button data-mview="studentid" onclick="navigate('studentid')">👤<span>Profile</span></button>
+</nav>
+<div id="toast"></div>
+<script src="app.js"></script>
+<script>
+if('serviceWorker' in navigator){
+  navigator.serviceWorker.register('/static/sw.js').then(()=>console.log('SW registered')).catch(e=>console.log('SW fail',e));
+}
+</script>
+</body>
+</html>
