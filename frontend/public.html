@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Smart Attendance for Modern Schools</title>
+<meta name="description" content="A secure, connected platform for attendance, students, teachers, parents and school administration.">
+<meta property="og:title" content="Smart Attendance for Modern Schools">
+<meta property="og:description" content="Secure, connected platform for attendance, students, teachers, parents and school administration.">
+<meta property="og:type" content="website">
+<link rel="stylesheet" href="style.css">
+<style>
+.public-hero{background:linear-gradient(135deg,#1E3A8A,#3b82f6);color:#fff;padding:48px 24px;text-align:center}
+.public-grid{max-width:1100px;margin:0 auto;padding:24px;display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
+.public-nav{position:sticky;top:0;background:#fff;border-bottom:1px solid #e5e7eb;padding:12px 24px;display:flex;gap:12px;align-items:center;z-index:10}
+.public-nav a{font-size:14px;color:#1E3A8A;text-decoration:none;font-weight:600}
+</style>
+</head>
+<body>
+<nav class="public-nav" aria-label="Public navigation">
+  <b id="pubSchool">🏫 Smart Attendance</b>
+  <a href="#home">Home</a><a href="#about">About</a><a href="#features">Features</a><a href="#notices">Notices</a><a href="#events">Events</a><a href="#contact">Contact</a>
+  <span style="margin-left:auto"></span>
+  <a href="/" style="background:#1E3A8A;color:#fff;padding:8px 14px;border-radius:8px">Login</a>
+</nav>
+<header id="home" class="public-hero">
+  <h1>Smart Attendance for Modern Schools</h1>
+  <p>A secure, connected platform for attendance, students, teachers, parents and school administration.</p>
+  <div style="margin-top:16px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
+    <a href="/" style="background:#fff;color:#1E3A8A;padding:10px 18px;border-radius:10px;font-weight:700;text-decoration:none">Login</a>
+    <a href="#features" style="border:1px solid #fff;color:#fff;padding:10px 18px;border-radius:10px;text-decoration:none">Explore Features</a>
+    <a href="#contact" style="border:1px solid #fff;color:#fff;padding:10px 18px;border-radius:10px;text-decoration:none">Contact School</a>
+  </div>
+</header>
+<main>
+<section id="about" class="public-grid"><div class="card" style="grid-column:1/-1"><h2>About School</h2><div id="aboutBody" class="muted">Loading...</div></div></section>
+<section id="features" class="public-grid">
+  <div class="card"><h3>✅ Smart Attendance</h3><p class="muted">Session, subject & time tracking with Late support.</p></div>
+  <div class="card"><h3>🔳 QR Attendance</h3><p class="muted">Expiring class-scoped QR codes, server-validated.</p></div>
+  <div class="card"><h3>📊 Analytics</h3><p class="muted">Trends, heatmap, insights from real data.</p></div>
+  <div class="card"><h3>👨‍👩‍👧 Parent Portal</h3><p class="muted">Child snapshot, alerts, review requests.</p></div>
+  <div class="card"><h3>🪪 Digital ID</h3><p class="muted">QR contains ID only — no personal data.</p></div>
+  <div class="card"><h3>📡 Offline Mode</h3><p class="muted">Queue locally, sync safely, no duplicates.</p></div>
+</section>
+<section id="notices" class="public-grid"><div class="card" style="grid-column:1/-1"><h2>📢 Public Notices</h2><div id="pubNotices">Loading...</div></div></section>
+<section id="events" class="public-grid"><div class="card" style="grid-column:1/-1"><h2>📅 Events & Holidays</h2><div id="pubEvents">Loading...</div></div></section>
+<section id="contact" class="public-grid"><div class="card" style="grid-column:1/-1"><h2>Contact</h2><div id="contactInfo" class="muted"></div>
+<form id="contactForm" style="margin-top:12px;display:grid;gap:8px;max-width:420px">
+<label>Name*<input id="cName" required style="width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:8px"></label>
+<label>Email<input id="cEmail" style="width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:8px"></label>
+<label>Message*<textarea id="cMsg" required style="width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:8px"></textarea></label>
+<button class="btn-primary" type="submit">Send</button><span id="cOk" class="muted"></span>
+</form></div></section>
+</main>
+<footer style="text-align:center;padding:24px" class="muted"><small>© Smart Attendance • Privacy • Terms • No private student data on this page</small></footer>
+<script>
+async function load(){
+  try{
+    const info=await fetch('/api/public/info').then(r=>r.json());
+    document.getElementById('pubSchool').textContent='🏫 '+(info.school_name||'Smart Attendance');
+    document.getElementById('aboutBody').innerHTML=`<b>${info.school_name||''}</b><br>${info.address||''}<br>${info.contact||''}`;
+    document.getElementById('contactInfo').textContent=(info.address||'')+' • '+(info.contact||'');
+  }catch(e){}
+  try{
+    const n=await fetch('/api/public/notices').then(r=>r.json());
+    document.getElementById('pubNotices').innerHTML=n.length? n.map(x=>`<div style="padding:8px;border-bottom:1px solid #f1f5f9"><b>📢 ${x.title}</b> <small>${x.date||''}</small><p>${x.content||''}</p></div>`).join('') : 'No notices.';
+  }catch(e){}
+  try{
+    const ev=await fetch('/api/public/events').then(r=>r.json());
+    document.getElementById('pubEvents').innerHTML=`<h4>Holidays</h4>`+(ev.holidays||[]).map(h=>`<div>📅 ${h.title} — ${h.date}</div>`).join('')+`<h4>Exams</h4>`+(ev.exams||[]).map(x=>`<div>📝 ${x.title} — ${x.date}</div>`).join('');
+  }catch(e){}
+}
+document.getElementById('contactForm').addEventListener('submit', async (e)=>{
+  e.preventDefault();
+  const r=await fetch('/api/public/contact',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:document.getElementById('cName').value,email:document.getElementById('cEmail').value,message:document.getElementById('cMsg').value})});
+  document.getElementById('cOk').textContent=r.ok?'Sent ✅':'Failed';
+});
+load();
+</script>
+</body>
+</html>
