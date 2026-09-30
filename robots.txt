@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /public
+Allow: /manifest.json
+Disallow: /api/
+Sitemap: /sitemap.xml
