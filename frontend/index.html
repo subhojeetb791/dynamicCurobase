@@ -353,7 +353,8 @@
         <div class="card" style="margin-top:12px"><h3>⏱️ Temporary Class QR (expires, anti-duplicate)</h3>
           <div class="toolbar"><select id="qrTmpClass"></select><select id="qrTmpSection"></select><select id="qrTmpSubject"><option value="">No subject</option></select><button class="btn-primary" onclick="createTempQR()">Generate Temporary QR (5 min)</button></div>
           <div id="qrTempDisplay" class="qr-display"></div>
-          <div class="toolbar"><input id="qrTempToken" placeholder="Paste QR token"><input id="qrTempCode" placeholder="Student ID"><button class="btn-green" onclick="scanTempQR()">Verify & Mark</button></div>
+          <div class="toolbar"><input id="qrTempToken" placeholder="Paste QR token"><input id="qrTempCode" placeholder="Student ID"><button class="btn-green" onclick="scanTempQR()">Verify & Mark</button><button class="btn-navy" onclick="scanQRNative()">📷 Scan with Camera</button></div>
+          <small class="muted">Camera is used only for QR scanning. If permission is denied, paste the token manually.</small>
         </div>
       </section>
 

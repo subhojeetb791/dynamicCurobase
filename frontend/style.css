@@ -179,6 +179,11 @@ tr:hover td{background:#f8fafc}
   .search-wrap{max-width:200px}
   #mobileNav{display:flex}
   #content{padding-bottom:76px}
+  button, .btn-primary, .btn-outline, .btn-green, .btn-red, .btn-navy{min-height:44px}
+  input, select{font-size:16px;min-height:44px}
+  .table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  table{font-size:12px}
+  .modal-content{width:96vw;padding:14px}
 }
 /* Mobile bottom nav + mobile-first cards */
 #mobileNav{display:none;position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:1px solid var(--border);z-index:40;padding:6px 4px calc(6px + env(safe-area-inset-bottom))}

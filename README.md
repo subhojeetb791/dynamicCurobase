@@ -123,7 +123,8 @@ Role selection on login is **NOT trusted** — backend uses DB `users.role`.
 ## Deployment (Desktop + Mobile + Public Web, one backend)
 - **Shared backend:** `python app.py` → `http://127.0.0.1:5000` (SQLite `data/attendance.db`, session auth, RBAC). Phone same WiFi: `http://<PC-IP>:5000`.
 - **Desktop:** `python desktop.py` (pywebview, Admin/Teacher) or Electron: `cd electron && npm i && npm start` (`BACKEND_URL=http://127.0.0.1:5000`), package with `npm run dist` → Windows installer.
-- **Mobile:** PWA — open site on phone → Add to Home Screen (bottom nav, offline queue, `frontend/static/sw.js`); Expo — see `mobile/README.md` (`expo-camera` QR → `POST /api/qr/scan-temp`, `expo-notifications` ← `/api/notifications`).
+- **Mobile:** PWA — open site on phone → Add to Home Screen (bottom nav, offline queue, `frontend/sw.js`); Expo — see `mobile/README.md` (`expo-camera` QR → `POST /api/qr/scan-temp`, `expo-notifications` ← `/api/notifications`).
+- **Android (Capacitor):** `npm install` → set `CAPACITOR_SERVER_URL=https://<your-render-app>.onrender.com` → `npx cap sync android` → `npx cap open android`; APK: `cd android && gradlew assembleDebug` (`app-debug.apk`) / `assembleRelease`; AAB: `gradlew bundleRelease`. Package ID `com.smartattendance.school`, signed release via your keystore (see README Android section below).
 - **Public website:** `/public` (SEO meta, sitemap `/sitemap.xml`, robots) — only `/api/public/*` (info/notices/events/contact), never private data.
 - **Public HTTPS:** `%TEMP%\cloudflared.exe tunnel --url http://127.0.0.1:5000` (or `ngrok http 5000` after authtoken).
 - **Render/Railway:** `pip install -r requirements.txt` + start `python app.py` + env `ATTENDANCE_SECRET`.
@@ -135,6 +136,15 @@ Role selection on login is **NOT trusted** — backend uses DB `users.role`.
 - `Port 5000 in use` → `taskkill /F /IM python.exe` or change `app.run(port=5001)`
 - `ngrok ERR_NGROK_4018` → need `ngrok config add-authtoken` (Cloudflare `trycloudflare.com` works without)
 - `no file` on logo → ensure `data/` writable, max 2MB PNG/JPG/WebP
+
+## Android App (Capacitor)
+- **Requirements:** Node.js 18+, Java 17, Android Studio (SDK 34) — see `package.json`, `capacitor.config.ts`, `android/`.
+- **Setup:** `npm install` → `CAPACITOR_SERVER_URL=https://dynamiccuro.onrender.com npx cap sync android` → `npx cap open android`.
+- **Run:** emulator (`npx cap run android`) or USB phone with USB debugging.
+- **APK:** `cd android && gradlew assembleDebug` → `android/app/build/outputs/apk/debug/app-debug.apk`; release: `gradlew assembleRelease` (add your `keystore` signing config first).
+- **AAB (Play):** `gradlew bundleRelease` → `app-release.aab`; sign, then upload to Play Console.
+- **Permissions:** Camera only at QR-scan time (with rationale + manual-token fallback); notifications opt-in (Android 13+); HTTPS-only (`usesCleartextTraffic=false`); no localhost in prod (`BACKEND_URL` meta / `CAPACITOR_SERVER_URL`).
+- **Back button:** closes modals → dashboard → exit (native `App` plugin + fallback).
 
 ## Security Notes
 - Passwords hashed SHA256 (upgrade to bcrypt in production)

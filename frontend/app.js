@@ -905,6 +905,50 @@ async function scanTempQR(){
 }
 window.addEventListener('offline', () => { toast('You are offline — actions will queue', false); });
 window.addEventListener('online', () => { toast('Back online'); });
+// ---- Android back button (Capacitor App plugin; browser fallback: none) ----
+(function setupBackButton(){
+  const goBack = () => {
+    // close topmost modal first
+    const openModal = document.querySelector('.modal.open');
+    if(openModal){ openModal.classList.remove('open'); return; }
+    const panel = document.getElementById('notifPanel');
+    if(panel && !panel.classList.contains('hidden')){ panel.classList.add('hidden'); return; }
+    // navigate to dashboard instead of exiting
+    const active = document.querySelector('.view.active')?.id;
+    if(active && active !== 'view-dashboard'){ navigate('dashboard'); return; }
+    if(window.Capacitor?.Plugins?.App){ window.Capacitor.Plugins.App.exitApp(); }
+  };
+  if(window.Capacitor?.Plugins?.App){
+    window.Capacitor.Plugins.App.addListener('backButton', goBack);
+  }
+  document.addEventListener('backbutton', goBack, false); // Cordova fallback
+})();
+// ---- Native QR scan bridge (MLKit on Android; manual fallback on web) ----
+// Expects QR payload format "ATTEND:<token>" (see /api/qr/image/<token>).
+async function scanQRNative(){
+  const setToken = (t) => { const el=$('#qrTempToken'); if(el) el.value=t; };
+  try{
+    const scanning = window.Capacitor?.Plugins?.BarcodeScanning;
+    if(!scanning) throw new Error('native-unavailable');
+    const perm = await scanning.requestPermissions();
+    if(perm.camera !== 'granted'){
+      toast('Camera permission denied. Paste the QR token manually.', false);
+      return;
+    }
+    const { barcodes } = await scanning.scan({ hint: 1, formats: [] });
+    const raw = (barcodes?.[0]?.displayValue || '').trim();
+    const m = raw.match(/ATTEND:([A-Za-z0-9_\-]+)/);
+    if(!m){ toast('QR not recognized as attendance code', false); return; }
+    setToken(m[1]);
+    toast('QR scanned — enter Student ID and Verify');
+  }catch(e){
+    if(String(e?.message||'').includes('native-unavailable')){
+      toast('Native scanner unavailable here — paste the token manually.');
+    } else {
+      toast('Scan failed: '+(e?.message||e), false);
+    }
+  }
+}
 // boot: load login branding + restore session + rememberMe
 (async()=>{
   // load login branding (public)
