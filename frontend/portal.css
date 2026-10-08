@@ -1,0 +1,149 @@
+/* =====================================================================
+   Student & Parent portal styles — dedicated login screens, portal
+   dashboard, attendance calendar, homework and exam report.
+   ===================================================================== */
+
+/* ---------- dedicated login cards ---------- */
+/* the shared .login-card rules make every input full-width and every label
+   block-level; undo that for the remember-me toggle */
+.login-card label.check{display:flex;gap:6px;align-items:center;font-weight:500;margin:10px 0 4px}
+.login-card label.check input[type=checkbox]{width:auto!important;padding:0;margin:0;flex:none;accent-color:var(--navy)}
+#studentLoginSchoolInfo:empty,#parentLoginSchoolInfo:empty{display:none}
+.login-role-icon{
+  width:66px;height:66px;border-radius:20px;display:flex;align-items:center;
+  justify-content:center;font-size:34px;background:#dbeafe;margin:0 auto 10px;
+  box-shadow:var(--shadow);
+}
+.login-role-icon.parent{background:#ede9fe}
+.login-card h2{text-align:center}
+.login-alt-links{
+  display:flex;gap:16px;justify-content:center;flex-wrap:wrap;margin-top:14px;
+  padding-top:12px;border-top:1px dashed var(--border);
+}
+.login-alt-links a{font-size:13px;font-weight:600;color:var(--navy);text-decoration:none}
+.login-alt-links a:hover,.login-alt-links a:focus{text-decoration:underline}
+.login-card .login-hint{font-size:12px;color:var(--muted);margin-top:10px;text-align:center}
+.login-school-info{text-align:center;margin-bottom:6px}
+
+/* ---------- portal home replaces the staff KPI grid ---------- */
+#view-dashboard.portal-mode > :not(#portalHome){display:none!important}
+#portalHome{margin-bottom:4px}
+#portalHome .stat-grid,
+#view-attcal .stat-grid,
+#view-homework .stat-grid,
+#view-exams .stat-grid{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+
+/* ---------- child switcher ---------- */
+.child-switch{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+.chip{
+  border:1px solid var(--border);background:#fff;border-radius:14px;padding:8px 14px;
+  font-size:13px;font-weight:600;cursor:pointer;color:var(--text);text-align:center;
+  font-family:inherit;
+}
+.chip small{display:block;font-weight:500;color:var(--muted);font-size:11px}
+.chip.active{background:var(--navy);border-color:var(--navy);color:#fff}
+.chip.active small{color:#c7d2fe}
+.chip:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+
+/* ---------- profile card ---------- */
+.pf-card{display:flex;flex-direction:column;gap:14px}
+.pf-top{display:flex;gap:14px;align-items:center}
+.pf-photo{
+  width:76px;height:76px;border-radius:16px;object-fit:cover;
+  border:3px solid var(--navy);background:#eef2ff;flex:none;
+}
+.pf-photo.placeholder{display:flex;align-items:center;justify-content:center;font-size:32px}
+.pf-top h3{margin:0 0 4px}
+.pf-top p{margin:0 0 6px;font-size:13px}
+.pf-rows{display:grid;gap:6px}
+.pf-row{
+  display:flex;justify-content:space-between;gap:12px;padding:8px 10px;
+  background:#f8fafc;border-radius:8px;font-size:13px;
+}
+.pf-row span{color:var(--muted)}
+.pf-row b{text-align:right;word-break:break-word}
+.pf-actions{display:flex;gap:8px;flex-wrap:wrap}
+
+/* ---------- attendance calendar ---------- */
+.att-cal{user-select:none}
+.cal-head,.cal-body{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
+.cal-head span{
+  text-align:center;font-size:11px;font-weight:700;color:var(--muted);
+  text-transform:uppercase;letter-spacing:.06em;padding-bottom:4px;
+}
+.cal-cell{
+  min-height:58px;border-radius:10px;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:2px;font-size:13px;
+  background:#f1f5f9;border:1px solid transparent;
+}
+.cal-cell.empty{background:transparent;border-color:transparent}
+.cal-cell b{line-height:1}
+.cal-cell i{font-style:normal;font-size:9px;color:var(--muted);text-align:center;padding:0 2px}
+.cal-cell.p{background:#dcfce7;border-color:#bbf7d0}
+.cal-cell.p b{color:#166534}
+.cal-cell.a{background:#fee2e2;border-color:#fecaca}
+.cal-cell.a b{color:#991b1b}
+.cal-cell.l{background:#fef3c7;border-color:#fde68a}
+.cal-cell.t{background:#ffedd5;border-color:#fed7aa}
+.cal-cell.h{background:#e0e7ff;border-color:#c7d2fe}
+.cal-cell.h b{color:#3730a3}
+.att-legend{
+  display:flex;gap:12px;flex-wrap:wrap;margin-top:10px;font-size:12px;color:var(--muted);
+}
+.sw{width:12px;height:12px;border-radius:4px;display:inline-block;margin-right:4px;vertical-align:-1px}
+.sw.p{background:#22c55e}.sw.a{background:#ef4444}.sw.l{background:#f59e0b}
+.sw.t{background:#fb923c}.sw.h{background:#818cf8}.sw.n{background:#cbd5e1}
+
+/* ---------- status pills ---------- */
+.pill.p{background:#dcfce7;color:#166534;border-color:#bbf7d0}
+.pill.a{background:#fee2e2;color:#991b1b;border-color:#fecaca}
+.pill.l{background:#fef3c7;color:#92400e;border-color:#fde68a}
+.pill.t{background:#ffedd5;color:#9a3412;border-color:#fed7aa}
+.pill.h{background:#e0e7ff;color:#3730a3;border-color:#c7d2fe}
+.pill.n{background:#f1f5f9;color:#475569;border-color:#e2e8f0}
+.pill.ok{background:#dcfce7;color:#166534;border-color:#bbf7d0}
+.pill.danger{background:#fee2e2;color:#991b1b;border-color:#fecaca}
+
+/* ---------- homework ---------- */
+.hw-card{border-left:4px solid var(--blue)}
+.hw-card.ok{border-left-color:var(--green)}
+.hw-card.warn{border-left-color:var(--yellow)}
+.hw-card.danger{border-left-color:var(--red)}
+.hw-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
+.hw-head b{font-size:14px}
+.hw-card small.muted{font-size:12px}
+.hw-card p{margin:8px 0 0;font-size:13px;color:var(--text)}
+.hw-foot{margin-top:10px;font-size:12px;color:var(--muted)}
+
+/* ---------- exam report ---------- */
+.grade-badge{
+  background:#dcfce7;color:#166534;border:1px solid #bbf7d0;border-radius:10px;
+  padding:4px 12px;font-weight:700;font-size:14px;
+}
+.exam-mini{display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap}
+.exam-mini p{margin:0}
+
+/* ---------- notices ---------- */
+.notice-card{border-left:4px solid var(--yellow)}
+.notice-card b{display:block;margin-bottom:4px}
+.notice-card p{margin:0 0 6px;font-size:13px}
+
+/* ---------- accessibility ---------- */
+@media (prefers-reduced-motion: reduce){
+  *{animation:none!important;transition:none!important}
+}
+.cal-cell:focus-visible,.chip:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+
+/* ---------- responsive ---------- */
+@media (max-width:900px){
+  .grid-2{grid-template-columns:1fr}
+  .cal-cell{min-height:46px;font-size:12px}
+  .cal-cell i{display:none}
+  .pf-photo{width:64px;height:64px}
+}
+@media (max-width:560px){
+  .login-card{padding:20px}
+  .pf-row{flex-direction:column;gap:2px}
+  .pf-row b{text-align:left}
+  .pf-actions .btn-outline,.pf-actions .btn-ghost{flex:1 1 auto}
+}

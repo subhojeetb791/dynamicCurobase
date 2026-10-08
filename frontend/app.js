@@ -34,6 +34,11 @@ const VIEW_ROLES = {
   studentid: ['admin','teacher','student','parent'],
   reviews: ['admin','teacher','student','parent'],
   features: ['admin','teacher','student','parent'],
+  attcal: ['admin','teacher','student','parent'],
+  homework: ['admin','teacher','student','parent'],
+  exams: ['admin','teacher','student','parent'],
+  profile: ['admin','teacher','student','parent'],
+  password: ['admin','teacher','student','parent'],
   'denied': ['admin','teacher','student','parent']
 };
 function canView(role, view){
@@ -73,15 +78,27 @@ async function api(p,opts={}){
     throw new Error(j.error||'Not authenticated');
   }
   if(r.status===403){
-    const role = state.role || 'unknown';
-    showDenied(role, p);
+    // Surface the reason without hijacking the view the user is looking at.
+    // (view-level denial is handled by navigate() -> showDenied())
+    toast(j.error||'Access denied', false);
     throw new Error(j.error||'Access denied');
   }
   if(!r.ok) throw new Error(j.error||'Error');
   return j;
 }
+/* Staff-only editing controls stay out of the way for students/parents.
+   Presentation only — the backend rejects those writes regardless of the UI. */
+function syncStaffOnlyControls(){
+  const staff = ['admin','teacher'].includes(state.role);
+  ['#classToolbar','#dsToolbar','#noticeToolbar','#enoteToolbar'].forEach(sel=>{
+    const el = document.querySelector(sel);
+    if(el) el.classList.toggle('hidden', !staff);
+  });
+}
 function navigate(v){
   const role = state.role || 'admin';
+  // Students/parents never mark the roster — send them to their own calendar.
+  if((role==='student' || role==='parent') && v==='attendance') v='attcal';
   if(!canView(role, v)){
     showDenied(role, v);
     toast('Access denied for '+role,false);
@@ -89,6 +106,7 @@ function navigate(v){
   }
   $$('#nav button, .nav-mini button').forEach(b=>b.classList.toggle('active', b.dataset.view===v));
   $$('.view').forEach(s=>s.classList.toggle('active', s.id==='view-'+v));
+  syncStaffOnlyControls();
   if(v==='features') v='features';
   const t=document.querySelector(`[data-view="${v}"]`)?.textContent?.trim() || v;
   const pt=$('#pageTitle'); if(pt) pt.textContent=t;
@@ -115,6 +133,11 @@ function navigate(v){
   if(v==='qr') {}
   if(v==='notices') loadNotices();
   if(v==='enotes') loadENotes();
+  if(v==='attcal') loadAttCal();
+  if(v==='homework') loadHomeworkView();
+  if(v==='exams') loadExamReport();
+  if(v==='profile') loadProfileView();
+  if(v==='password') loadPasswordView();
   if(v==='meals') loadMeals();
   if(v==='scholarship') loadScholarships();
   if(v==='complaints') loadComplaints();
@@ -126,8 +149,10 @@ function toggleProfile(){ $('#profileDrop')?.classList.toggle('hidden'); }
 async function logout(){
   try{ await fetch(BACKEND_URL + '/api/auth/logout',{method:'POST',credentials:'same-origin'}); }catch(e){}
   state.currentUser=null; state.role=null;
+  if(typeof logoutPortal==='function') logoutPortal();
   $('#appShell')?.classList.add('hidden');
   const ls=$('#loginScreen'); if(ls) ls.style.display='flex';
+  if(typeof showLoginCard==='function') showLoginCard((typeof portal!=='undefined' && portal.mode) ? portal.mode : 'staff');
   toast('Logged out');
 }
 function globalSearch(){ const q=$('#globalSearch')?.value.toLowerCase()||''; if(q.length<2) return; if(['student','class','attendance'].some(w=>q.includes(w))) navigate(q.includes('student')?'students':q.includes('attendance')?'attendance':'classes'); }
@@ -141,8 +166,11 @@ async function loadLoginSchoolInfo(){
     if(leftH1) leftH1.textContent=name;
     const loginLogo=$('#loginLogo'), loginName=$('#loginSchoolName');
     if(loginName) loginName.textContent=name;
+    ['#studentLoginSchoolName','#parentLoginSchoolName'].forEach(sel=>{
+      const e2=document.querySelector(sel); if(e2) e2.textContent=name;
+    });
     if(loginLogo && logo){
-      loginLogo.src='${BACKEND_URL}/api/logo/'+logo;
+      loginLogo.src=`${BACKEND_URL}/api/logo/${logo}`;
       loginLogo.classList.remove('hidden');
     }
     // also update topbar if already logged
@@ -150,6 +178,8 @@ async function loadLoginSchoolInfo(){
 }
 async function doLogin(e){
   if(e) e.preventDefault();
+  if(typeof logoutPortal==='function') logoutPortal();
+  if(typeof portal!=='undefined') portal.mode='staff';
   const u=$('#loginUser').value.trim(), p=$('#loginPass').value;
   const msgEl=$('#loginMsg'), btn=$('#loginBtn');
   if(!u || !p){ if(msgEl) msgEl.textContent='Username and password required'; toast('Username and password required',false); return; }
@@ -256,25 +286,19 @@ async function loadDashboard(){
   const tsn=$('#topSchoolName'); if(tsn) tsn.textContent=s.school_name||'Smart Attendance';
   const rb=$('#roleBadge'); if(rb) rb.textContent=(state.role||'').toUpperCase();
   if(state.role==='student' || state.role==='parent'){
-    try{
-      const att=await api('/api/attendance?date='+new Date().toISOString().slice(0,10));
-      const my = att.students[0];
-      if(my){
-        el('kpiTotal', '1'); el('kpiPresent', my.status==='P'?'1':'0');
-        el('kpiAbsent', my.status==='A'?'1':'0'); el('kpiLeave', my.status==='L'?'1':'0');
-        el('kpiLate', my.status==='T'?'1':'0'); el('kpiRate', my.status==='P'||my.status==='T'?'100%':'0%');
-        el('kpiClasses', s.total_classes||'-');
-        el('legP', my.status==='P'?'1':'0'); el('legA', my.status==='A'?'1':'0');
-        el('legL', my.status==='L'?'1':'0'); const lt=$('#legT'); if(lt) lt.textContent=my.status==='T'?'1':'0';
-        el('legN', my.status?'0':'1');
-        const pct = (my.status==='P'||my.status==='T')?100:0;
-        const donut=document.getElementById('donut'); if(donut){ donut.style.setProperty('--p', pct); const sp=donut.querySelector('span'); if(sp) sp.textContent=pct+'%'; }
-      }
-    }catch(e){}
-    const si=document.getElementById('schoolInfo'); if(si) si.innerHTML=`<b>Personal Dashboard (${state.role})</b> • Session ${sessName}`;
+    // dedicated Student / Parent portal home (rendered by portal.js)
+    const si=document.getElementById('schoolInfo');
+    if(si) si.innerHTML='<b>'+(state.role==='parent'?'Parent':'Student')+' Dashboard</b> • Session '+sessName;
+    if(typeof loadPortalHome==='function') loadPortalHome();
     loadNotifBadge();
     return;
   }
+  // staff session: make sure a portal home from an earlier student/parent
+  // login is not left on screen
+  const portalHome=document.getElementById('portalHome');
+  if(portalHome) portalHome.classList.add('hidden');
+  const dashEl=document.getElementById('view-dashboard');
+  if(dashEl) dashEl.classList.remove('portal-mode');
   el('kpiTotal', s.total_students??'-');
   el('kpiPresent', s.present_today??'-');
   el('kpiAbsent', s.absent_today??'-');
@@ -571,7 +595,9 @@ async function delParent(id){ if(state.role!=='admin') return toast('Admin only'
 async function loadWhatsApp(){ let data; try{ data=await api('/api/whatsapp'); }catch(e){ data=[]; } const el=$('#waList'); if(!el) return; el.innerHTML=data.length? `<table><thead><tr><th>Class</th><th>Section</th><th>Link</th></tr></thead><tbody>`+data.map(w=>`<tr><td>${w.class_name||w.class_id}</td><td>${w.section_name||w.section_id}</td><td><a href="${w.link}" target="_blank">${w.link}</a></td></tr>`).join('')+`</tbody></table>` : `<div class="muted" style="padding:16px">No WhatsApp groups yet.</div>`; }
 async function saveWhatsApp(){ if(!['admin','teacher'].includes(state.role)) return toast('Access denied',false); const c=$('#waClass').value, s=$('#waSection').value, link=$('#waLink').value.trim(); if(!c||!s||!link) return toast('All fields required',false); try{await api('/api/whatsapp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({class_id:c,section_id:s,link})}); loadWhatsApp(); toast('Group saved');}catch(e){toast(e.message,false)} }
 
-async function loadDateSheets(){ let data; try{ data=await api('/api/datesheets'); }catch(e){ data=[]; } const el=$('#dsTable'); if(!el) return; el.innerHTML=data.length? `<table><thead><tr><th>Class</th><th>Exam</th><th>Subject</th><th>Date</th><th>Time</th><th></th></tr></thead><tbody>`+data.map(d=>`<tr><td>${d.class_name||d.class_id}</td><td>${d.exam_type}</td><td>${d.subject}</td><td>${d.date}</td><td>${d.time||''}</td><td>${state.role==='admin'?`<button class="btn-red" onclick="delDS(${d.id})">Delete</button>`:''}</td></tr>`).join('')+`</tbody></table>` : `<div class="muted" style="padding:16px">No date sheets.</div>`; }
+async function loadDateSheets(){ let data; try{ data = (state.role==='student'||state.role==='parent')
+      ? ((await api('/api/portal/datesheet'+(childQs()?'?'+childQs().slice(1):''))).datesheet||[])
+      : await api('/api/datesheets'); }catch(e){ data=[]; } const el=$('#dsTable'); if(!el) return; el.innerHTML=data.length? `<table><thead><tr><th>Class</th><th>Exam</th><th>Subject</th><th>Date</th><th>Time</th><th></th></tr></thead><tbody>`+data.map(d=>`<tr><td>${d.class_name||d.class_id}</td><td>${d.exam_type}</td><td>${d.subject}</td><td>${d.date}</td><td>${d.time||''}</td><td>${state.role==='admin'?`<button class="btn-red" onclick="delDS(${d.id})">Delete</button>`:''}</td></tr>`).join('')+`</tbody></table>` : `<div class="muted" style="padding:16px">No date sheets.</div>`; }
 async function addDateSheet(){ if(state.role!=='admin') return toast('Admin only',false); const class_id=$('#dsClass').value, exam_type=$('#dsExam').value, subject=$('#dsSubject').value.trim(), date=$('#dsDate').value, time=$('#dsTime').value; if(!class_id||!subject||!date) return toast('Class, subject, date required',false); try{await api('/api/datesheets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({class_id,exam_type,subject,date,time})}); loadDateSheets(); toast('Added');}catch(e){toast(e.message,false)} }
 async function delDS(id){ if(state.role!=='admin') return toast('Admin only',false); try{await api('/api/datesheets?id='+id,{method:'DELETE'}); loadDateSheets();}catch(e){toast(e.message,false)} }
 
@@ -636,7 +662,7 @@ async function loadSettings(){
     if(topbarLogo) topbarLogo.classList.add('hidden');
     if(logoPrev) logoPrev.innerHTML=`<span class="muted">No logo uploaded — shows 🎓</span>`;
   }
-  let perms; try{ perms=await api('/api/permissions'); }catch(e){ perms=[]; } const pg=$('#permGrid'); if(pg) pg.innerHTML=perms.map(p=>`<label style="display:flex;gap:6px;align-items:center"><input type="checkbox" checked> ${p}</label>`).join(''); let users; try{ users=await api('/api/users'); }catch(e){ users=[]; } const ut=$('#userTable'); if(ut){ if(state.role!=='admin'){ ut.innerHTML=`<div class="muted">🔒 Admin only</div>`; } else { ut.innerHTML=users.length? `<table><thead><tr><th>User</th><th>Role</th><th></th></tr></thead><tbody>`+users.map(u=>`<tr><td>${u.username}</td><td>${u.role}</td><td><button class="btn-red" onclick="delUser(${u.id})">Delete</button></td></tr>`).join('')+`</tbody></table>` : `No users`; } } let hist; try{ hist=await api('/api/login_history'); }catch(e){ hist=[]; } const lh=$('#loginHistory'); if(lh){ if(state.role!=='admin'){ lh.innerHTML=`<div class="muted">🔒 Admin only</div>`; } else { lh.innerHTML=hist.length? `<table><thead><tr><th>User</th><th>Time</th><th>OK</th></tr></thead><tbody>`+hist.map(h=>`<tr><td>${h.username}</td><td>${h.time}</td><td>${h.success?'✅':'❌'}</td></tr>`).join('')+`</tbody></table>` : `No history`; } }
+  let perms; try{ perms=await api('/api/permissions'); }catch(e){ perms=[]; } const pg=$('#permGrid'); if(pg) pg.innerHTML=perms.map(p=>`<label style="display:flex;gap:6px;align-items:center"><input type="checkbox" checked> ${p}</label>`).join(''); let users=[], hist=[]; if(state.role==='admin'){ try{ users=await api('/api/users'); }catch(e){ users=[]; } try{ hist=await api('/api/login_history'); }catch(e){ hist=[]; } } const ut=$('#userTable'); if(ut){ if(state.role!=='admin'){ ut.innerHTML=`<div class="muted">🔒 Admin only</div>`; } else { ut.innerHTML=users.length? `<table><thead><tr><th>User</th><th>Role</th><th></th></tr></thead><tbody>`+users.map(u=>`<tr><td>${u.username}</td><td>${u.role}</td><td><button class="btn-red" onclick="delUser(${u.id})">Delete</button></td></tr>`).join('')+`</tbody></table>` : `No users`; } } const lh=$('#loginHistory'); if(lh){ if(state.role!=='admin'){ lh.innerHTML=`<div class="muted">🔒 Admin only</div>`; } else { lh.innerHTML=hist.length? `<table><thead><tr><th>User</th><th>Time</th><th>OK</th></tr></thead><tbody>`+hist.map(h=>`<tr><td>${h.username}</td><td>${h.time}</td><td>${h.success?'✅':'❌'}</td></tr>`).join('')+`</tbody></table>` : `No history`; } }
   // hide settings actions for non-admin
   const saveBtn=document.querySelector('#view-settings .btn-primary');
   if(saveBtn && state.role!=='admin') saveBtn.style.display='none';
@@ -864,10 +890,9 @@ function syncMobileNav(v){
 const _origNavigate = navigate;
 navigate = function(v){
   syncMobileNav(v);
-  // mobile hero for student/parent
-  if((state.role==='student'||state.role==='parent') && v==='dashboard'){
-    setTimeout(renderMobileHero, 200);
-  }
+  // The dedicated Student/Parent portal home (portal.js) replaces the old
+  // mobile hero: the hero only knew about the *first* linked child, so for a
+  // parent switching children it showed the wrong name.
   return _origNavigate(v);
 };
 async function renderMobileHero(){
@@ -961,16 +986,29 @@ async function scanQRNative(){
     if(me && me.user){
       state.currentUser=me.user; state.role=me.user.role;
       $('#loginScreen').style.display='none'; $('#appShell').classList.remove('hidden');
-      $('#topName').textContent=me.user.username;
+      const portalRole = me.user.role==='student' || me.user.role==='parent';
+      if(portalRole && typeof loadPortalMe==='function'){
+        try{ await loadPortalMe(); }catch(e){}
+        if(typeof portal!=='undefined') portal.mode = me.user.role;
+      }
+      const who = (portalRole && typeof portalAccountName === 'function')
+        ? portalAccountName()
+        : me.user.username;
+      $('#topName').textContent=who;
       $('#topRole').textContent=me.user.role;
       const pdN=$('#pdName'), pdR=$('#pdRole');
-      if(pdN) pdN.textContent=me.user.username;
+      if(pdN) pdN.textContent=who;
       if(pdR) pdR.textContent=me.user.role+' • Green Valley';
-      const dt=$('#dashTeacher'); if(dt) dt.textContent=me.user.username;
+      const dt=$('#dashTeacher'); if(dt) dt.textContent=who;
       filterNavByRole(me.user.role);
       loadDashboard(); loadClasses(); loadSettings();
     } else {
       try{ await loadClasses(); }catch(e){}
+      // honour ?login=student / ?login=parent deep links
+      try{
+        const want=new URLSearchParams(location.search).get('login');
+        if(want && ['student','parent','staff'].includes(want)) showLoginCard(want);
+      }catch(e){}
     }
   }catch(e){ try{ await loadClasses(); }catch(e){} }
   // ensure login form Enter works (already via onsubmit)

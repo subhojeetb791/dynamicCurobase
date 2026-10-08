@@ -345,33 +345,6 @@ def init_db():
                    ("admin", ph, "admin", json.dumps(PERMISSIONS), datetime.datetime.now().isoformat()))
         db.execute("INSERT INTO users (username,password_hash,role,permissions,created_at) VALUES (?,?,?,?,?)",
                    ("teacher", hashlib.sha256("teacher123".encode()).hexdigest(), "teacher", json.dumps(["dashboard","student_view","attendance_view","attendance_edit","marks","reports"]), datetime.datetime.now().isoformat()))
-    # ensure demo student exists for student/parent linkage
-    # create demo student if not exists
-    cur.execute("SELECT id FROM students WHERE student_id='STU001'")
-    demo_sid = cur.fetchone()
-    if not demo_sid:
-        # use class 1, section A
-        cur.execute("SELECT id FROM classes WHERE name='1'")
-        c1 = cur.fetchone()
-        cid = c1[0] if c1 else 1
-        cur.execute("SELECT id FROM sections WHERE class_id=? AND name='A'", (cid,))
-        sec = cur.fetchone()
-        sid = sec[0] if sec else 1
-        try:
-            db.execute("INSERT INTO students (student_id, roll_no, name, class_id, section_id, father_name, mother_name, phone, address, dob, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                       ("STU001","01","Aarav Sharma", cid, sid, "Ramesh Sharma","Sunita Sharma","9876543210","Green Valley","2010-05-12", datetime.datetime.now().isoformat()))
-            demo_sid = db.execute("SELECT id FROM students WHERE student_id='STU001'").fetchone()[0]
-        except: demo_sid = None
-    else:
-        demo_sid = demo_sid[0]
-        try: demo_sid = db.execute("SELECT id FROM students WHERE student_id='STU001'").fetchone()[0]
-        except: pass
-    # seed student/parent users linked to STU001
-    for uname, pwd, role in [("student","student123","student"), ("parent","parent123","parent")]:
-        cur.execute("SELECT id FROM users WHERE username=?", (uname,))
-        if not cur.fetchone():
-            db.execute("INSERT INTO users (username,password_hash,role,permissions,linked_student_id,created_at) VALUES (?,?,?,?,?,?)",
-                       (uname, hashlib.sha256(pwd.encode()).hexdigest(), role, json.dumps([]), demo_sid, datetime.datetime.now().isoformat()))
     # ensure teacher has no link
     # migration: add missing columns for old DB
     for col, typ in [("address","TEXT DEFAULT ''"), ("contact","TEXT DEFAULT ''")]:
@@ -429,6 +402,212 @@ def init_db():
             db.execute("INSERT INTO academic_sessions (name,start_date,end_date,active) VALUES (?,?,?,1)", ("2026-27","2026-04-01","2027-03-31",))
             db.execute("INSERT INTO academic_sessions (name,start_date,end_date,active) VALUES (?,?,?,0)", ("2025-26","2025-04-01","2026-03-31",))
     except: pass
+
+    # =================================================================
+    #  Student & Parent portal migrations
+    # =================================================================
+    try:
+        db.execute("""
+        CREATE TABLE IF NOT EXISTS homework (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            class_id INTEGER,
+            section_id INTEGER,
+            subject TEXT,
+            title TEXT NOT NULL,
+            description TEXT DEFAULT '',
+            due_date TEXT,
+            assigned_by INTEGER,
+            school_id INTEGER DEFAULT 1,
+            created_at TEXT,
+            FOREIGN KEY(class_id) REFERENCES classes(id) ON DELETE CASCADE,
+            FOREIGN KEY(section_id) REFERENCES sections(id) ON DELETE CASCADE
+        )""")
+    except Exception: pass
+
+    # parents: parent_id (PAR-xxxx) + password hash for PIN-style login
+    for col, typ in [("parent_id","TEXT"), ("password_hash","TEXT")]:
+        try: db.execute(f"ALTER TABLE parents ADD COLUMN {col} {typ}")
+        except Exception: pass
+
+    # parent <-> student link table (one parent, many children)
+    try:
+        db.execute("""
+        CREATE TABLE IF NOT EXISTS parent_students (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            student_id INTEGER NOT NULL,
+            UNIQUE(user_id, student_id),
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+        )""")
+    except Exception: pass
+
+    # backfill parent_students from existing single-link data so nothing breaks
+    try:
+        db.execute("""
+        INSERT OR IGNORE INTO parent_students (user_id, student_id)
+        SELECT u.id, u.linked_student_id FROM users u
+        WHERE u.role='parent' AND u.linked_student_id IS NOT NULL
+          AND EXISTS (SELECT 1 FROM students s WHERE s.id=u.linked_student_id)""")
+        db.execute("""
+        INSERT OR IGNORE INTO parent_students (user_id, student_id)
+        SELECT p.user_id, p.student_id FROM parents p
+        WHERE p.user_id IS NOT NULL AND p.student_id IS NOT NULL
+          AND EXISTS (SELECT 1 FROM students s WHERE s.id=p.student_id)""")
+        # drop links that point at deleted students
+        db.execute("""DELETE FROM parent_students
+                      WHERE student_id NOT IN (SELECT id FROM students)""")
+        db.execute("""DELETE FROM parent_students
+                      WHERE user_id NOT IN (SELECT id FROM users)""")
+    except Exception: pass
+
+    # give every parent user a stable Parent ID (PAR-5001...) if missing
+    def _new_parent_id(used):
+        n = 5001
+        while (f"PAR-{n}" in used) or f"PAR-{n}" == "PAR-5012":   # PAR-5012 reserved for the demo parent
+            n += 1
+        used.add(f"PAR-{n}")
+        return f"PAR-{n}"
+    try:
+        used = set(r[0] for r in db.execute(
+            "SELECT parent_id FROM parents WHERE parent_id IS NOT NULL AND parent_id<>''").fetchall())
+        rows = db.execute("SELECT id FROM parents WHERE parent_id IS NULL OR parent_id=''").fetchall()
+        for r in rows:
+            db.execute("UPDATE parents SET parent_id=? WHERE id=?", (_new_parent_id(used), r[0]))
+        # parent users that have no parents row yet -> create one
+        prows = db.execute("""
+            SELECT u.id, u.username, u.password_hash FROM users u
+            WHERE u.role='parent'
+              AND NOT EXISTS (SELECT 1 FROM parents p WHERE p.user_id=u.id)""").fetchall()
+        for r in prows:
+            db.execute("""INSERT INTO parents (name, phone, email, student_id, user_id, parent_id, password_hash, school_id)
+                          VALUES (?,?,?,?,?,?,?,1)""",
+                       (r[1], '', '', None, r[0], _new_parent_id(used), r[2]))
+    except Exception: pass
+
+    # ---- demo student + parent portal accounts -------------------
+    # NOTE: the original INSERT listed 11 columns but had 12 placeholders, so it
+    # always failed silently (the except swallowed it) and left
+    # users.linked_student_id pointing at a student row that no longer existed.
+    # This block runs AFTER the migrations so parent_id / parent_students exist.
+    def _class_sec(class_name, sec_name="A"):
+        c = db.execute("SELECT id FROM classes WHERE name=?", (class_name,)).fetchone()
+        cid = c[0] if c else None
+        if cid is None:
+            return None, None
+        s = db.execute("SELECT id FROM sections WHERE class_id=? AND name=?", (cid, sec_name)).fetchone()
+        return cid, (s[0] if s else None)
+
+    def _ensure_student(sid_label, roll, name, cls, sec, father, mother, dob, adm):
+        row = db.execute("SELECT id FROM students WHERE student_id=?", (sid_label,)).fetchone()
+        if row:
+            return row[0]
+        cid, secid = _class_sec(cls, sec)
+        db.execute("""INSERT INTO students (student_id, roll_no, name, class_id, section_id,
+                      father_name, mother_name, phone, address, dob, admission_no, created_at)
+                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   (sid_label, roll, name, cid, secid, father, mother, "9876543210",
+                    "Green Valley", dob, adm, datetime.datetime.now().isoformat()))
+        return db.execute("SELECT id FROM students WHERE student_id=?", (sid_label,)).fetchone()[0]
+
+    try:
+        demo_sid  = _ensure_student("STU001", "01", "Aarav Sharma", "1", "A",
+                                    "Ramesh Sharma", "Sunita Sharma", "2010-05-12", "ADM-2010-0001")
+        # second child of the same family -> makes multi-child parent login testable
+        demo_sid2 = _ensure_student("STU009", "09", "Kiara Sharma", "3", "A",
+                                    "Ramesh Sharma", "Sunita Sharma", "2013-02-18", "ADM-2013-0009")
+
+        for uname, pwd, role in [("student", "student123", "student"), ("parent", "parent123", "parent")]:
+            row = db.execute("SELECT id, linked_student_id FROM users WHERE username=?", (uname,)).fetchone()
+            if not row:
+                db.execute("INSERT INTO users (username,password_hash,role,permissions,linked_student_id,created_at) VALUES (?,?,?,?,?,?)",
+                           (uname, hashlib.sha256(pwd.encode()).hexdigest(), role, json.dumps([]),
+                            demo_sid, datetime.datetime.now().isoformat()))
+            elif row[1] and not db.execute("SELECT 1 FROM students WHERE id=?", (row[1],)).fetchone():
+                # repair a dangling link left behind by a deleted student row
+                db.execute("UPDATE users SET linked_student_id=? WHERE id=?", (demo_sid, row[0]))
+
+        # demo parent: stable Parent ID PAR-5012, password, links to BOTH children
+        pur = db.execute("SELECT id, linked_student_id FROM users WHERE username='parent'").fetchone()
+        if pur:
+            puid = pur[0]
+            if not db.execute("SELECT 1 FROM parents WHERE user_id=?", (puid,)).fetchone():
+                db.execute("""INSERT INTO parents (name, phone, email, student_id, user_id, parent_id, password_hash, school_id)
+                              VALUES (?,?,?,?,?,?,?,1)""",
+                           ("Ramesh Sharma", "9876543210", "ramesh.sharma@example.com",
+                            demo_sid, puid, "PAR-5012",
+                            hashlib.sha256("parent123".encode()).hexdigest()))
+            else:
+                db.execute("""UPDATE parents SET name=?, phone=?, email=?, parent_id=?, password_hash=?
+                              WHERE user_id=?""",
+                           ("Ramesh Sharma", "9876543210", "ramesh.sharma@example.com", "PAR-5012",
+                            hashlib.sha256("parent123".encode()).hexdigest(), puid))
+            for c in (demo_sid, demo_sid2):
+                db.execute("INSERT OR IGNORE INTO parent_students (user_id, student_id) VALUES (?,?)", (puid, c))
+            if not db.execute("SELECT 1 FROM students WHERE id=?", (pur[1] or -1,)).fetchone():
+                db.execute("UPDATE users SET linked_student_id=? WHERE id=?", (demo_sid, puid))
+        db.execute("""DELETE FROM parent_students
+                      WHERE student_id NOT IN (SELECT id FROM students)""")
+    except Exception: pass
+
+    # ---- demo homework for the two demo children (class 1-A and class 3-A) ----
+    try:
+        if db.execute("SELECT COUNT(*) FROM homework").fetchone()[0] == 0:
+            samples = {
+                "1": [("Mathematics", "Worksheet: Addition up to 100",
+                       "Solve questions 1-20 from page 42.", 2),
+                      ("English", "Read chapter 3 and write a summary",
+                       "Write 10 lines in your notebook.", 3),
+                      ("Science", "Leaf identification activity",
+                       "Collect 5 different leaves and label them.", 5)],
+                "3": [("Mathematics", "Tables 2 to 5",
+                       "Write each table three times.", 1),
+                      ("Hindi", "पाठ 4 - सारे दिन चलो",
+                       "प्रश्न 1 से 5 हल करें।", 4)],
+            }
+            for cls, items in samples.items():
+                cid, secid = _class_sec(cls, "A")
+                for subj, title, desc, days in items:
+                    db.execute("""INSERT INTO homework (class_id, section_id, subject, title, description, due_date,
+                                  assigned_by, school_id, created_at)
+                                  VALUES (?,?,?,?,?,?,?,1,?)""",
+                               (cid, secid, subj, title, desc,
+                                (datetime.date.today() + datetime.timedelta(days=days)).isoformat(),
+                                None, datetime.datetime.now().isoformat()))
+    except Exception: pass
+
+    # ---- demo attendance + marks so the student/parent dashboards are not empty ----
+    try:
+        hset0 = set(x[0] for x in db.execute("SELECT date FROM holidays").fetchall())
+        seq = ['P','P','A','P','P','T','P','L','P','P','P','A','P','P','P',
+               'P','L','P','P','P','P','A','P','P','P','P','P','T','P','P']
+        exam_names = ["Unit Test 1", "Mid-Term"]
+        for sid_label, bump in (('STU001', 8), ('STU009', 3)):
+            srow = db.execute("SELECT id FROM students WHERE student_id=?", (sid_label,)).fetchone()
+            if not srow:
+                continue
+            spk = srow[0]
+            if db.execute("SELECT COUNT(*) FROM attendance WHERE student_id=?", (spk,)).fetchone()[0] == 0:
+                today = datetime.date.today()
+                for i in range(30):
+                    d = today - datetime.timedelta(days=i)
+                    ds = d.isoformat()
+                    if d.weekday() == 6 or ds in hset0:
+                        continue
+                    db.execute("""INSERT INTO attendance (student_id, date, status, time, marked_by, marked_at)
+                                  VALUES (?,?,?,?,?,?)""",
+                               (spk, ds, seq[i % len(seq)], "09:00", 1,
+                                datetime.datetime.now().isoformat()))
+            if db.execute("SELECT COUNT(*) FROM marks WHERE student_id=?", (spk,)).fetchone()[0] == 0:
+                subs = [r[0] for r in db.execute("SELECT id FROM subjects ORDER BY id").fetchall()]
+                for ei, exam in enumerate(exam_names):
+                    for i, subid in enumerate(subs):
+                        obtained = 58 + ((i * 9 + bump + ei * 5) % 38)
+                        db.execute("""INSERT INTO marks (student_id, subject_id, exam_type, max_marks, obtained)
+                                      VALUES (?,?,?,?,?)""",
+                                   (spk, subid, exam, 100, obtained))
+    except Exception: pass
+
     db.commit()
     db.close()
 
@@ -522,6 +701,109 @@ def can(role, feature, action="view"):
     if val == "view_own" and action=="view": return True
     if val == "view_child" and action=="view": return True
     return False
+
+# ---------- Ownership guards (Student / Parent isolation) ----------
+def readable_student_ids(u):
+    """Set of students.id this user may read, or None when unrestricted (admin/teacher).
+
+    A student may only ever read their own row. A parent may only read the rows
+    explicitly linked to their account via parent_students / parents.
+    """
+    if not u:
+        return set()
+    if u['role'] in ('admin', 'teacher'):
+        return None                      # unrestricted (feature-level RBAC still applies)
+    db = get_db()
+    ids = set()
+    if u.get('linked_student_id'):
+        ids.add(int(u['linked_student_id']))
+    try:
+        for r in db.execute("SELECT student_id FROM parent_students WHERE user_id=?", (u['id'],)).fetchall():
+            if r[0]: ids.add(int(r[0]))
+        for r in db.execute("SELECT student_id FROM parents WHERE user_id=? AND student_id IS NOT NULL",
+                            (u['id'],)).fetchall():
+            ids.add(int(r[0]))
+    except Exception:
+        pass
+    return ids
+
+def student_scope(u, requested=None, must_have_link=False):
+    """Resolve the students.id the caller is allowed to read.
+
+    Returns an int            -> allowed, use it
+    Returns a (body, status)  -> return it straight from the route (401/403/400)
+    """
+    if not u:
+        return (jsonify({"error":"Not authenticated"}), 401)
+    allowed = readable_student_ids(u)
+    if allowed is None:                       # admin / teacher
+        if requested in (None, ''):
+            return (jsonify({"error":"student id required"}), 400)
+        try:
+            return int(requested)
+        except (TypeError, ValueError):
+            return (jsonify({"error":"Invalid student id"}), 400)
+    if requested in (None, ''):
+        if not allowed:
+            if must_have_link:
+                return (jsonify({"error":"No student linked to this account"}), 403)
+            return None                       # caller wants "all readable" (a list)
+        return sorted(allowed)[0] if must_have_link else None
+    try:
+        pk = int(requested)
+    except (TypeError, ValueError):
+        return (jsonify({"error":"Invalid student id"}), 400)
+    if pk in allowed:
+        return pk
+    # Never reveal whether the other student exists.
+    return (jsonify({"error":"Access denied: you are not authorised to view this record"}), 403)
+
+def readable_filter_sql(u, column="student_id"):
+    """(sql_fragment, params) that restricts a query to the caller's readable rows."""
+    allowed = readable_student_ids(u)
+    if allowed is None:
+        return ("", [])
+    if not allowed:
+        return (" AND 1=0", [])
+    marks = ",".join("?" for _ in allowed)
+    return (f" AND {column} IN ({marks})", sorted(allowed))
+
+# ---------- Default-deny for the API ----------
+# Anything under /api/ requires a session unless it is explicitly public.
+# Individual routes still do their own role + ownership checks; this guard only
+# guarantees that a route can never accidentally expose data anonymously.
+PUBLIC_API_ANY = (
+    '/api/auth/login',
+    '/api/auth/student-login',
+    '/api/auth/parent-login',
+    '/api/auth/check',
+    '/api/auth/logout',
+)
+PUBLIC_API_GET = (
+    '/api/settings',      # school name + logo shown on the login screens
+    '/api/logo',          # logo image for the login screens
+    '/api/photos',        # avatars
+    '/api/public',        # public school info / notice board
+    '/api/permissions',
+    '/api/roles',
+    '/api/exam_types',
+    '/api/qr/image',
+)
+
+@app.before_request
+def _guard_api():
+    path = request.path
+    if not path.startswith('/api/'):
+        return None
+    if request.method == 'OPTIONS':
+        return None
+    if any(path.startswith(p) for p in PUBLIC_API_ANY):
+        return None
+    if request.method == 'GET' and any(path.startswith(p) for p in PUBLIC_API_GET):
+        return None
+    if get_current_user() is None:
+        return jsonify({"error": "Not authenticated"}), 401
+    return None
 
 # ---------- Helpers ----------
 def is_holiday(date_str):
@@ -669,12 +951,17 @@ def sections_api():
 def students_api():
     db=get_db()
     u = get_current_user()
-    # Allow public read for dashboard before login? Prefer require auth, but allow if no session for initial demo
-    # Enforce isolation for student/parent
+    # Authenticated reads only; student/parent rows are filtered to their own records.
     if request.method=='GET':
-        # student/parent isolation: only own/child
-        if u and u['role'] in ('student','parent') and u.get('linked_student_id'):
-            rows=db.execute("SELECT s.*, c.name as class_name, sec.name as section_name FROM students s LEFT JOIN classes c ON s.class_id=c.id LEFT JOIN sections sec ON sec.id=s.section_id WHERE s.id=?", (u['linked_student_id'],)).fetchall()
+        if not u:
+            return jsonify({"error":"Not authenticated"}), 401
+        # student/parent isolation: only own / linked children (never the roster)
+        allowed = readable_student_ids(u)
+        if allowed is not None:
+            if not allowed:
+                return jsonify([])
+            marks_list = ",".join("?" for _ in allowed)
+            rows=db.execute(f"SELECT s.*, c.name as class_name, sec.name as section_name FROM students s LEFT JOIN classes c ON s.class_id=c.id LEFT JOIN sections sec ON sec.id=s.section_id WHERE s.id IN ({marks_list}) ORDER BY s.name", sorted(allowed)).fetchall()
             return jsonify([dict(r) for r in rows])
         q=request.args.get('q','')
         class_id=request.args.get('class_id')
@@ -825,14 +1112,29 @@ def attendance_api():
         date=request.args.get('date') or datetime.date.today().isoformat()
         class_id=request.args.get('class_id')
         section_id=request.args.get('section_id')
-        # list students + attendance for date
         u=get_current_user()
-        if u and u['role'] in ('student','parent') and u.get('linked_student_id'):
-            sql="SELECT s.*, a.status, a.leave_reason FROM students s LEFT JOIN attendance a ON a.student_id=s.id AND a.date=? WHERE s.id=?"
-            params=[date, u['linked_student_id']]
-            rows=db.execute(sql, params).fetchall()
-            holiday=is_holiday(date)
-            holiday_row=db.execute("SELECT * FROM holidays WHERE date=?", (date,)).fetchone()
+        if not u:
+            return jsonify({"error":"Not authenticated"}), 401
+        allowed = readable_student_ids(u)
+        holiday=is_holiday(date)
+        holiday_row=db.execute("SELECT * FROM holidays WHERE date=?", (date,)).fetchone()
+        if allowed is not None:
+            # student / parent: never the class list — only rows they are linked to
+            ids = sorted(allowed)
+            want = request.args.get('student_id')
+            if want:
+                res = student_scope(u, want)
+                if isinstance(res, tuple):
+                    return res
+                ids = [res]
+            if not ids:
+                return jsonify({"date":date, "is_holiday": holiday,
+                                "holiday": dict(holiday_row) if holiday_row else None, "students":[]})
+            marks_list = ",".join("?" for _ in ids)
+            sql=("SELECT s.*, a.status, a.leave_reason FROM students s "
+                 "LEFT JOIN attendance a ON a.student_id=s.id AND a.date=? "
+                 f"WHERE s.id IN ({marks_list})")
+            rows=db.execute(sql, [date]+ids).fetchall()
             return jsonify({"date":date, "is_holiday": holiday, "holiday": dict(holiday_row) if holiday_row else None, "students":[dict(r) for r in rows]})
         subject_id=request.args.get('subject_id')
         sql="SELECT s.*, a.status, a.leave_reason, a.time, a.subject_id FROM students s LEFT JOIN attendance a ON a.student_id=s.id AND a.date=? "
@@ -1195,11 +1497,27 @@ def marks_api():
     if request.method=='POST' and (not u or not can(u['role'], "examinations", "add")):
         return jsonify({"error":"Access denied: cannot manage marks"}),403
     if request.method=='GET':
+        u = get_current_user()
+        if not u:
+            return jsonify({"error":"Not authenticated"}), 401
         student_id=request.args.get('student_id')
         exam_type=request.args.get('exam_type')
         sql="SELECT m.*, s.name as subject_name FROM marks m JOIN subjects s ON s.id=m.subject_id WHERE 1=1"
         params=[]
-        if student_id: sql+=" AND m.student_id=?"; params.append(student_id)
+        allowed = readable_student_ids(u)
+        if allowed is not None:
+            # student / parent: hard-restrict to their own readable rows
+            if not allowed:
+                return jsonify([])
+            if student_id:
+                res = student_scope(u, student_id)
+                if isinstance(res, tuple):
+                    return res
+            marks_list = ",".join("?" for _ in allowed)
+            sql += f" AND m.student_id IN ({marks_list})"
+            params.extend(sorted(allowed))
+        elif student_id:
+            sql += " AND m.student_id=?"; params.append(student_id)
         if exam_type: sql+=" AND m.exam_type=?"; params.append(exam_type)
         rows=db.execute(sql, params).fetchall()
         return jsonify([dict(r) for r in rows])
@@ -1225,12 +1543,23 @@ def marks_api():
 @app.route('/api/marks/report')
 def marks_report():
     db=get_db()
+    u=get_current_user()
+    if not u:
+        return jsonify({"error":"Not authenticated"}), 401
     class_id=request.args.get('class_id')
     exam_type=request.args.get('exam_type')
     sql="""SELECT st.id, st.student_id, st.name, st.roll_no, c.name as class_name, sec.name as sec_name
            FROM students st LEFT JOIN classes c ON c.id=st.class_id LEFT JOIN sections sec ON sec.id=st.section_id WHERE 1=1"""
     params=[]
     if class_id: sql+=" AND st.class_id=?"; params.append(class_id)
+    allowed = readable_student_ids(u)
+    if allowed is not None:
+        # a student/parent only ever sees their own report card, never the class list
+        if not allowed:
+            return jsonify([])
+        marks_list = ",".join("?" for _ in allowed)
+        sql += f" AND st.id IN ({marks_list})"
+        params.extend(sorted(allowed))
     rows=db.execute(sql, params).fetchall()
     out=[]
     for r in rows:
@@ -1246,6 +1575,9 @@ def marks_report():
 def monthly_api():
     hit=_check_api_rate("reports")
     if hit: return hit
+    u = get_current_user()
+    if not u:
+        return jsonify({"error":"Not authenticated"}), 401
     db=get_db()
     month=request.args.get('month') # YYYY-MM
     class_id=request.args.get('class_id')
@@ -1267,6 +1599,14 @@ def monthly_api():
     params=[]
     if class_id: sql+=" AND s.class_id=?"; params.append(class_id)
     if section_id: sql+=" AND s.section_id=?"; params.append(section_id)
+    allowed = readable_student_ids(u)
+    if allowed is not None:
+        # a student/parent only ever gets their own row out of the monthly report
+        if not allowed:
+            return jsonify({"month":month, "working_days":len(working), "working_dates":working, "students":[]})
+        marks_list = ",".join("?" for _ in allowed)
+        sql += f" AND s.id IN ({marks_list})"
+        params.extend(sorted(allowed))
     students=db.execute(sql, params).fetchall()
     out=[]
     for s in students:
@@ -1386,17 +1726,36 @@ def logout():
     session.clear()
     return jsonify({"ok":True})
 
+def _student_detail(pk):
+    row = get_db().execute(
+        """SELECT s.*, c.name as class_name, sec.name as section_name
+           FROM students s
+           LEFT JOIN classes c ON c.id=s.class_id
+           LEFT JOIN sections sec ON sec.id=s.section_id
+           WHERE s.id=?""", (pk,)).fetchone()
+    return dict(row) if row else None
+
 @app.route('/api/auth/me', methods=['GET'])
 def me():
     u = get_current_user()
     if not u:
         return jsonify({"user":None}), 200
     # include linked student details if student/parent
-    linked = None
-    if u.get('linked_student_id'):
-        row = get_db().execute("SELECT s.*, c.name as class_name, sec.name as section_name FROM students s LEFT JOIN classes c ON c.id=s.class_id LEFT JOIN sections sec ON sec.id=s.section_id WHERE s.id=?", (u['linked_student_id'],)).fetchone()
-        if row: linked = dict(row)
-    return jsonify({"user":u, "linked_student": linked})
+    linked = _student_detail(u['linked_student_id']) if u.get('linked_student_id') else None
+    # every student row this account is allowed to read (1 for a student, 1..n for a parent)
+    children = []
+    allowed = readable_student_ids(u)
+    if allowed:
+        for pk in sorted(allowed):
+            d = _student_detail(pk)
+            if d: children.append(d)
+    parent_row = None
+    if u['role'] == 'parent':
+        pr = get_db().execute("SELECT parent_id, name, phone, email FROM parents WHERE user_id=?", (u['id'],)).fetchone()
+        parent_row = dict(pr) if pr else None
+    if not linked and children:
+        linked = children[0]
+    return jsonify({"user":u, "linked_student": linked, "children": children, "parent": parent_row})
 
 @app.route('/api/auth/check', methods=['GET'])
 def auth_check():
@@ -1404,6 +1763,106 @@ def auth_check():
     if not u:
         return jsonify({"authenticated":False}), 401
     return jsonify({"authenticated":True, "user":u})
+
+def _finish_login(row):
+    """Create the session for an authenticated users row and return the JSON payload."""
+    db = get_db()
+    db.execute("INSERT INTO login_history (username,time,success) VALUES (?,?,?)",
+               (row['username'], datetime.datetime.now().isoformat(), 1))
+    db.commit()
+    session.permanent = True
+    session['user_id'] = row['id']
+    session['role'] = row['role']
+    session['username'] = row['username']
+    return jsonify({"ok":True, "user":{
+        "id":row['id'], "username":row['username'], "role":row['role'],
+        "permissions": json.loads(row['permissions'] or '[]'),
+        "linked_student_id": row['linked_student_id']}})
+
+def _login_fail(u, ip):
+    """Uniform failure: log it, rate-limit it, never reveal which half was wrong."""
+    db = get_db()
+    db.execute("INSERT INTO login_history (username,time,success) VALUES (?,?,?)",
+               (u or '', datetime.datetime.now().isoformat(), 0))
+    db.commit()
+    if _rate_limited(f"login:{ip}", limit=10, window=300):
+        return jsonify({"success": False, "error": {
+            "code": "RATE_LIMITED",
+            "message": "Too many unsuccessful login attempts. Please try again later."}}), 429
+    return jsonify({"error":"Invalid credentials"}), 401
+
+@app.route('/api/auth/student-login', methods=['POST'])
+def student_login():
+    """Student sign-in by Student ID **or** Admission Number + password.
+
+    The identifier is only ever used to *locate* the account; the session is bound
+    to the users row, and every later read goes through student_scope().
+    """
+    ip = request.headers.get('X-Forwarded-For', request.remote_addr or 'unknown')
+    d = request.get_json() or {}
+    ident = (d.get('identifier') or '').strip()
+    pw = d.get('password') or ''
+    if not ident or not pw:
+        return jsonify({"error":"Student ID and password are required"}), 400
+    db = get_db()
+    st = db.execute(
+        "SELECT id FROM students WHERE lower(student_id)=lower(?) OR lower(admission_no)=lower(?)",
+        (ident, ident)).fetchone()
+    user = None
+    if st:
+        user = db.execute("SELECT * FROM users WHERE role='student' AND linked_student_id=?",
+                          (st['id'],)).fetchone()
+    if not user:
+        user = db.execute("SELECT * FROM users WHERE role='student' AND lower(username)=lower(?)",
+                          (ident,)).fetchone()
+    if user and user['password_hash'] == hash_pw(pw):
+        return _finish_login(user)
+    return _login_fail(ident, ip)
+
+@app.route('/api/auth/parent-login', methods=['POST'])
+def parent_login():
+    """Parent sign-in by Parent ID / registered mobile / username + password or PIN."""
+    ip = request.headers.get('X-Forwarded-For', request.remote_addr or 'unknown')
+    d = request.get_json() or {}
+    ident = (d.get('identifier') or '').strip()
+    pw = d.get('password') or ''
+    if not ident or not pw:
+        return jsonify({"error":"Parent ID / mobile number and password are required"}), 400
+    db = get_db()
+    user = None
+    prow = db.execute(
+        "SELECT user_id FROM parents WHERE (lower(parent_id)=lower(?) OR phone=?) AND user_id IS NOT NULL "
+        "ORDER BY id LIMIT 1",
+        (ident, ident)).fetchone()
+    if prow and prow['user_id']:
+        user = db.execute("SELECT * FROM users WHERE id=? AND role='parent'", (prow['user_id'],)).fetchone()
+    if not user:
+        user = db.execute("SELECT * FROM users WHERE role='parent' AND lower(username)=lower(?)",
+                          (ident,)).fetchone()
+    if user and user['password_hash'] == hash_pw(pw):
+        return _finish_login(user)
+    return _login_fail(ident, ip)
+
+@app.route('/api/auth/change-password', methods=['POST'])
+def change_password():
+    u = get_current_user()
+    if not u:
+        return jsonify({"error":"Not authenticated"}), 401
+    d = request.get_json() or {}
+    cur = d.get('current_password') or ''
+    new = d.get('new_password') or ''
+    if len(new) < 6:
+        return jsonify({"error":"New password must be at least 6 characters"}), 400
+    db = get_db()
+    row = db.execute("SELECT password_hash FROM users WHERE id=?", (u['id'],)).fetchone()
+    if not row or row['password_hash'] != hash_pw(cur):
+        return jsonify({"error":"Current password is incorrect"}), 403
+    db.execute("UPDATE users SET password_hash=? WHERE id=?", (hash_pw(new), u['id']))
+    if u['role'] == 'parent':
+        try: db.execute("UPDATE parents SET password_hash=? WHERE user_id=?", (hash_pw(new), u['id']))
+        except Exception: pass
+    db.commit()
+    return jsonify({"ok":True, "message":"Password updated"})
 
 @app.route('/api/users', methods=['GET','POST','DELETE'])
 def users_api():
@@ -1430,6 +1889,11 @@ def users_api():
 
 @app.route('/api/login_history')
 def login_history():
+    u = get_current_user()
+    if not u:
+        return jsonify({"error":"Not authenticated"}), 401
+    if u['role'] != 'admin':
+        return jsonify({"error":"Access denied: Admin only"}), 403
     rows=get_db().execute("SELECT * FROM login_history ORDER BY id DESC LIMIT 100").fetchall()
     return jsonify([dict(r) for r in rows])
 
@@ -1633,15 +2097,41 @@ def scholarships_api():
 @app.route('/api/complaints', methods=['GET','POST','DELETE'])
 def complaints_api():
     db=get_db()
+    u=get_current_user()
+    if not u:
+        return jsonify({"error":"Not authenticated"}), 401
     if request.method=='GET':
-        return jsonify([dict(r) for r in db.execute("SELECT * FROM complaints ORDER BY id DESC").fetchall()])
+        allowed = readable_student_ids(u)
+        if allowed is None:
+            rows = db.execute("SELECT * FROM complaints ORDER BY id DESC").fetchall()
+        elif not allowed:
+            rows = []
+        else:
+            marks_list = ",".join("?" for _ in allowed)
+            rows = db.execute(f"SELECT * FROM complaints WHERE student_id IN ({marks_list}) OR student_id IS NULL ORDER BY id DESC",
+                              sorted(allowed)).fetchall()
+        return jsonify([dict(r) for r in rows])
     if request.method=='POST':
-        d=request.get_json()
-        db.execute("INSERT INTO complaints (student_id,name,text,status,date) VALUES (?,?,?,?,?)", (d.get('student_id'), d.get('name'), d['text'], 'Open', datetime.date.today().isoformat()))
+        d=request.get_json() or {}
+        if not (d.get('text') or '').strip():
+            return jsonify({"error":"Please describe your concern"}), 400
+        sid = d.get('student_id')
+        name = d.get('name') or ''
+        if u['role'] in ('student','parent'):
+            res = student_scope(u, sid, must_have_link=True)
+            if isinstance(res, tuple):
+                return res
+            sid = res
+            detail = _student_detail(sid)
+            name = (d.get('name') or '').strip() or (detail['name'] if detail else u['username'])
+        db.execute("INSERT INTO complaints (student_id,name,text,status,date) VALUES (?,?,?,?,?)",
+                   (sid, name, d['text'], 'Open', datetime.date.today().isoformat()))
         db.commit()
         return jsonify({"ok":True})
+    # status toggle / delete: staff only
+    if not can(u['role'], "complaints", "edit"):
+        return jsonify({"error":"Access denied"}), 403
     cid=request.args.get('id')
-    # toggle status if provided
     if request.args.get('status'):
         db.execute("UPDATE complaints SET status=? WHERE id=?", (request.args.get('status'), cid))
         db.commit()
@@ -1954,13 +2444,14 @@ def timetable_api():
 def snapshot_api():
     db=get_db()
     u=get_current_user()
-    if not u or u['role'] not in ('parent','student','admin','teacher'):
+    if not u:
         return jsonify({"error":"Not authenticated"}),401
-    sid=request.args.get('student_id') or (u.get('linked_student_id') if u['role'] in ('student','parent') else None)
+    res = student_scope(u, request.args.get('student_id'),
+                        must_have_link=(u['role'] in ('student','parent')))
+    if isinstance(res, tuple):
+        return res
+    sid = res
     if not sid: return jsonify({"error":"student_id required"}),400
-    # isolation
-    if u['role'] in ('student','parent') and str(u.get('linked_student_id'))!=str(sid):
-        return jsonify({"error":"Access denied"}),403
     s=db.execute("SELECT s.*, c.name as class_name, sec.name as section_name FROM students s LEFT JOIN classes c ON c.id=s.class_id LEFT JOIN sections sec ON sec.id=s.section_id WHERE s.id=?", (sid,)).fetchone()
     if not s: return jsonify({"error":"Not found"}),404
     today=datetime.date.today().isoformat()
@@ -1982,10 +2473,12 @@ def snapshot_api():
 def id_card_api():
     db=get_db()
     u=get_current_user()
-    sid=request.args.get('student_id') or (u.get('linked_student_id') if u and u['role'] in ('student','parent') else None)
+    res = student_scope(u, request.args.get('student_id'),
+                        must_have_link=(bool(u) and u['role'] in ('student','parent')))
+    if isinstance(res, tuple):
+        return res
+    sid = res
     if not sid: return jsonify({"error":"student_id required"}),400
-    if u and u['role'] in ('student','parent') and str(u.get('linked_student_id'))!=str(sid):
-        return jsonify({"error":"Access denied"}),403
     s=db.execute("SELECT s.student_id,s.name,s.roll_no,c.name as class_name,sec.name as section_name,s.photo FROM students s LEFT JOIN classes c ON c.id=s.class_id LEFT JOIN sections sec ON sec.id=s.section_id WHERE s.id=?", (sid,)).fetchone()
     if not s: return jsonify({"error":"Not found"}),404
     sch=db.execute("SELECT school_name, logo_path FROM settings WHERE id=1").fetchone()
@@ -1997,10 +2490,12 @@ def id_card_api():
 def timeline_api():
     db=get_db()
     u=get_current_user()
-    sid=request.args.get('student_id') or (u.get('linked_student_id') if u and u['role'] in ('student','parent') else None)
+    res = student_scope(u, request.args.get('student_id'),
+                        must_have_link=(bool(u) and u['role'] in ('student','parent')))
+    if isinstance(res, tuple):
+        return res
+    sid = res
     if not sid: return jsonify({"error":"student_id required"}),400
-    if u and u['role'] in ('student','parent') and str(u.get('linked_student_id'))!=str(sid):
-        return jsonify({"error":"Access denied"}),403
     month=request.args.get('month'); status=request.args.get('status'); subject_id=request.args.get('subject_id')
     sql="SELECT date,status,time,leave_reason,subject_id FROM attendance WHERE student_id=? "
     params=[sid]
@@ -2018,17 +2513,24 @@ def reviews_api():
     u=get_current_user()
     if not u: return jsonify({"error":"Not authenticated"}),401
     if request.method=='GET':
-        if u['role'] in ('student','parent'):
-            rows=db.execute("SELECT r.*, s.name as student_name FROM review_requests r JOIN students s ON s.id=r.student_id WHERE r.student_id=? ORDER BY r.id DESC", (u.get('linked_student_id'),)).fetchall()
+        allowed = readable_student_ids(u)
+        if allowed is not None:
+            if not allowed:
+                return jsonify([])
+            marks_list = ",".join("?" for _ in allowed)
+            rows=db.execute(f"SELECT r.*, s.name as student_name FROM review_requests r JOIN students s ON s.id=r.student_id WHERE r.student_id IN ({marks_list}) ORDER BY r.id DESC", sorted(allowed)).fetchall()
             return jsonify([dict(r) for r in rows])
         rows=db.execute("SELECT r.*, s.name as student_name FROM review_requests r JOIN students s ON s.id=r.student_id ORDER BY r.id DESC LIMIT 100").fetchall()
         return jsonify([dict(r) for r in rows])
     if request.method=='POST':
         d=request.get_json() or {}
-        # student/parent create for own/child only
+        # student/parent create for own / linked child only
         sid=d.get('student_id') or u.get('linked_student_id')
-        if u['role'] in ('student','parent') and str(sid)!=str(u.get('linked_student_id')):
-            return jsonify({"error":"Access denied"}),403
+        if u['role'] in ('student','parent'):
+            res = student_scope(u, sid)
+            if isinstance(res, tuple):
+                return res
+            sid = res
         if not sid or not d.get('date'):
             return jsonify({"error":"student_id and date required"}),400
         cur=db.execute("SELECT status FROM attendance WHERE student_id=? AND date=? ORDER BY rowid DESC LIMIT 1", (sid, d.get('date'))).fetchone()
@@ -2189,6 +2691,312 @@ def roles_api():
 @app.route('/api/exam_types')
 def exam_types_api():
     return jsonify(EXAM_TYPES)
+
+# =================================================================
+#  Student & Parent Portal — read APIs (ownership enforced centrally)
+# =================================================================
+def _grade_for(pct):
+    if pct is None: return ""
+    if pct >= 90: return "A+"
+    if pct >= 80: return "A"
+    if pct >= 70: return "B+"
+    if pct >= 60: return "B"
+    if pct >= 50: return "C"
+    if pct >= 40: return "D"
+    return "E"
+
+def _portal_scope(u, must_have_link=True):
+    """Resolve the requested child (or the caller's own record)."""
+    res = student_scope(u, request.args.get('student_pk') or request.args.get('student_id'),
+                        must_have_link=must_have_link)
+    if isinstance(res, tuple):
+        return None, res
+    if must_have_link and not res:
+        return None, (jsonify({"error":"No student linked to this account"}), 403)
+    return res, None
+
+@app.route('/api/portal/profile')
+def portal_profile():
+    u = get_current_user()
+    if not u:
+        return jsonify({"error":"Not authenticated"}), 401
+    pk, err = _portal_scope(u)
+    if err: return err
+    db = get_db()
+    s = _student_detail(pk)
+    if not s:
+        return jsonify({"error":"Not found"}), 404
+    par = [dict(r) for r in db.execute(
+        "SELECT name, phone, email, parent_id FROM parents WHERE student_id=? OR user_id=?",
+        (pk, u['id'])).fetchall()]
+    sch = db.execute("SELECT school_name, address, contact FROM settings WHERE id=1").fetchone()
+    return jsonify({"student": s, "guardians": par,
+                    "school": dict(sch) if sch else None})
+
+@app.route('/api/portal/overview')
+def portal_overview():
+    """Everything the student/parent home screen needs in one round-trip."""
+    u = get_current_user()
+    if not u:
+        return jsonify({"error":"Not authenticated"}), 401
+    pk, err = _portal_scope(u)
+    if err: return err
+    db = get_db()
+    s = _student_detail(pk)
+    if not s:
+        return jsonify({"error":"Not found"}), 404
+
+    mkey = request.args.get('month') or datetime.date.today().strftime("%Y-%m")
+    try:
+        y, m = [int(x) for x in mkey.split('-')]
+    except Exception:
+        y, m = datetime.date.today().year, datetime.date.today().month
+        mkey = datetime.date.today().strftime("%Y-%m")
+    import calendar as calmod
+    dim = calmod.monthrange(y, m)[1]
+    hset = set(x[0] for x in db.execute("SELECT date FROM holidays").fetchall())
+    recs = {r['date']: dict(r) for r in db.execute(
+        "SELECT date, status, leave_reason FROM attendance WHERE student_id=? AND substr(date,1,7)=?",
+        (pk, mkey)).fetchall()}
+
+    cal = []
+    present = absent = leave = late = working = 0
+    for d in range(1, dim + 1):
+        ds = f"{y:04d}-{m:02d}-{d:02d}"
+        dow = datetime.datetime.strptime(ds, "%Y-%m-%d").weekday()
+        is_hol = (ds in hset) or dow == 6
+        rec = recs.get(ds)
+        st = rec['status'] if rec else ('H' if is_hol else None)
+        cal.append({"date": ds, "dow": dow, "status": st, "holiday": is_hol,
+                    "reason": (rec or {}).get('leave_reason') or ('Holiday' if is_hol else '')})
+        if not is_hol:
+            working += 1
+            if st == 'P': present += 1
+            elif st == 'A': absent += 1
+            elif st == 'L': leave += 1
+            elif st == 'T': late += 1
+    attended = present + late
+    pct = round(attended / working * 100, 1) if working else 0
+
+    today = datetime.date.today().isoformat()
+    trow = db.execute("SELECT status FROM attendance WHERE student_id=? AND date=? ORDER BY rowid DESC LIMIT 1",
+                      (pk, today)).fetchone()
+    hw_total = db.execute(
+        "SELECT COUNT(*) FROM homework WHERE (class_id IS NULL OR class_id=?) AND (section_id IS NULL OR section_id=?)",
+        (s['class_id'], s['section_id'])).fetchone()[0]
+    hw_due = db.execute(
+        "SELECT COUNT(*) FROM homework WHERE (class_id IS NULL OR class_id=?) AND (section_id IS NULL OR section_id=?) AND due_date<=?",
+        (s['class_id'], s['section_id'], (datetime.date.today() + datetime.timedelta(days=3)).isoformat())).fetchone()[0]
+    notices = [dict(r) for r in db.execute("SELECT * FROM notices ORDER BY id DESC LIMIT 5").fetchall()]
+    upcoming = [dict(r) for r in db.execute("SELECT * FROM datesheets WHERE class_id=? ORDER BY date LIMIT 5",
+                                            (s['class_id'],)).fetchall()]
+
+    return jsonify({
+        "student": s,
+        "month": mkey,
+        "calendar": cal,
+        "stats": {"working": working, "present": present, "absent": absent,
+                  "leave": leave, "late": late, "percentage": pct},
+        "today": trow[0] if trow else None,
+        "homework": {"total": hw_total, "due_soon": hw_due},
+        "notices": notices,
+        "upcoming_exams": upcoming,
+    })
+
+@app.route('/api/portal/attendance')
+def portal_attendance():
+    u = get_current_user()
+    if not u:
+        return jsonify({"error":"Not authenticated"}), 401
+    pk, err = _portal_scope(u)
+    if err: return err
+    db = get_db()
+    mkey = request.args.get('month') or datetime.date.today().strftime("%Y-%m")
+    try:
+        y, m = [int(x) for x in mkey.split('-')]
+    except Exception:
+        y, m = datetime.date.today().year, datetime.date.today().month
+        mkey = datetime.date.today().strftime("%Y-%m")
+    import calendar as calmod
+    dim = calmod.monthrange(y, m)[1]
+    hset = set(x[0] for x in db.execute("SELECT date FROM holidays").fetchall())
+    recs = {r['date']: dict(r) for r in db.execute(
+        "SELECT date, status, leave_reason, time FROM attendance WHERE student_id=? AND substr(date,1,7)=?",
+        (pk, mkey)).fetchall()}
+    cal = []
+    present = absent = leave = late = working = 0
+    for d in range(1, dim + 1):
+        ds = f"{y:04d}-{m:02d}-{d:02d}"
+        dow = datetime.datetime.strptime(ds, "%Y-%m-%d").weekday()
+        is_hol = (ds in hset) or dow == 6
+        rec = recs.get(ds)
+        st = rec['status'] if rec else ('H' if is_hol else None)
+        cal.append({"date": ds, "dow": dow, "status": st, "holiday": is_hol,
+                    "time": (rec or {}).get('time') or '',
+                    "reason": (rec or {}).get('leave_reason') or ('Holiday' if is_hol else '')})
+        if not is_hol:
+            working += 1
+            if st == 'P': present += 1
+            elif st == 'A': absent += 1
+            elif st == 'L': leave += 1
+            elif st == 'T': late += 1
+    attended = present + late
+    pct = round(attended / working * 100, 1) if working else 0
+    history = [dict(r) for r in db.execute(
+        "SELECT date, status, leave_reason, time FROM attendance WHERE student_id=? ORDER BY date DESC LIMIT 60",
+        (pk,)).fetchall()]
+    return jsonify({"student_pk": pk, "month": mkey, "calendar": cal, "history": history,
+                    "stats": {"working": working, "present": present, "absent": absent,
+                              "leave": leave, "late": late, "percentage": pct}})
+
+@app.route('/api/portal/marks')
+def portal_marks():
+    u = get_current_user()
+    if not u:
+        return jsonify({"error":"Not authenticated"}), 401
+    pk, err = _portal_scope(u)
+    if err: return err
+    db = get_db()
+    exams = [r[0] for r in db.execute(
+        "SELECT DISTINCT exam_type FROM marks m JOIN students s ON s.id=m.student_id "
+        "WHERE m.student_id=? ORDER BY m.exam_type", (pk,)).fetchall()]
+    out = []
+    overall_obt = overall_max = 0
+    for ex in exams:
+        rows = [dict(r) for r in db.execute(
+            "SELECT m.*, sub.name as subject_name FROM marks m JOIN subjects sub ON sub.id=m.subject_id "
+            "WHERE m.student_id=? AND m.exam_type=? ORDER BY sub.name", (pk, ex)).fetchall()]
+        obt = sum(r['obtained'] or 0 for r in rows)
+        mx = sum(r['max_marks'] or 100 for r in rows)
+        p = round(obt / mx * 100, 1) if mx else 0
+        for r in rows:
+            r['percentage'] = round((r['obtained'] or 0) / (r['max_marks'] or 100) * 100, 1)
+            r['grade'] = _grade_for(r['percentage'])
+        overall_obt += obt; overall_max += mx
+        out.append({"exam_type": ex, "subjects": rows, "obtained": obt, "max_marks": mx,
+                    "percentage": p, "grade": _grade_for(p)})
+    overall_p = round(overall_obt / overall_max * 100, 1) if overall_max else None
+    return jsonify({"student_pk": pk, "exams": out,
+                    "overall": {"obtained": overall_obt, "max_marks": overall_max,
+                                "percentage": overall_p, "grade": _grade_for(overall_p)}})
+
+@app.route('/api/portal/homework')
+def portal_homework():
+    u = get_current_user()
+    if not u:
+        return jsonify({"error":"Not authenticated"}), 401
+    pk, err = _portal_scope(u)
+    if err: return err
+    db = get_db()
+    s = _student_detail(pk)
+    if not s:
+        return jsonify({"error":"Not found"}), 404
+    rows = [dict(r) for r in db.execute(
+        "SELECT * FROM homework WHERE (class_id IS NULL OR class_id=?) AND (section_id IS NULL OR section_id=?) "
+        "ORDER BY (due_date IS NULL), due_date DESC, id DESC", (s['class_id'], s['section_id'])).fetchall()]
+    today = datetime.date.today()
+    soon = (today + datetime.timedelta(days=3)).isoformat()
+    for r in rows:
+        due = r.get('due_date')
+        if not due:
+            r['status'] = 'Open'
+        elif due < today.isoformat():
+            r['status'] = 'Overdue'
+        elif due <= soon:
+            r['status'] = 'Due soon'
+        else:
+            r['status'] = 'Upcoming'
+    return jsonify({"student_pk": pk, "class": s.get('class_name'),
+                    "section": s.get('section_name'), "homework": rows})
+
+@app.route('/api/portal/datesheet')
+def portal_datesheet():
+    u = get_current_user()
+    if not u:
+        return jsonify({"error":"Not authenticated"}), 401
+    pk, err = _portal_scope(u)
+    if err: return err
+    db = get_db()
+    s = _student_detail(pk)
+    if not s:
+        return jsonify({"error":"Not found"}), 404
+    rows = [dict(r) for r in db.execute(
+        "SELECT * FROM datesheets WHERE class_id=? ORDER BY date, time", (s['class_id'],)).fetchall()]
+    return jsonify({"student_pk": pk, "class": s.get('class_name'), "datesheet": rows})
+
+@app.route('/api/portal/enotes')
+def portal_enotes():
+    u = get_current_user()
+    if not u:
+        return jsonify({"error":"Not authenticated"}), 401
+    db = get_db()
+    rows = [dict(r) for r in db.execute("SELECT * FROM enotes ORDER BY id DESC LIMIT 50").fetchall()]
+    return jsonify(rows)
+
+@app.route('/api/portal/notices')
+def portal_notices():
+    u = get_current_user()
+    if not u:
+        return jsonify({"error":"Not authenticated"}), 401
+    db = get_db()
+    rows = [dict(r) for r in db.execute("SELECT * FROM notices ORDER BY id DESC LIMIT 30").fetchall()]
+    return jsonify(rows)
+
+@app.route('/api/portal/school')
+def portal_school():
+    u = get_current_user()
+    if not u:
+        return jsonify({"error":"Not authenticated"}), 401
+    db = get_db()
+    sch = db.execute("SELECT * FROM settings WHERE id=1").fetchone()
+    events = [dict(r) for r in db.execute("SELECT * FROM school_events ORDER BY date DESC LIMIT 10").fetchall()]
+    holidays = [dict(r) for r in db.execute("SELECT * FROM holidays ORDER BY date LIMIT 20").fetchall()]
+    return jsonify({"school": dict(sch) if sch else {}, "events": events, "holidays": holidays})
+
+# ---------- Homework (staff management) ----------
+@app.route('/api/homework', methods=['GET','POST','PUT','DELETE'])
+def homework_api():
+    db = get_db()
+    u = get_current_user()
+    if not u:
+        return jsonify({"error":"Not authenticated"}), 401
+    if request.method == 'GET':
+        if u['role'] in ('student', 'parent'):
+            return portal_homework()
+        rows = [dict(r) for r in db.execute(
+            "SELECT h.*, c.name as class_name, sec.name as section_name FROM homework h "
+            "LEFT JOIN classes c ON c.id=h.class_id LEFT JOIN sections sec ON sec.id=h.section_id "
+            "ORDER BY (h.due_date IS NULL), h.due_date DESC, h.id DESC").fetchall()]
+        return jsonify(rows)
+    if u['role'] not in ('admin', 'teacher'):
+        return jsonify({"error":"Access denied: staff only"}), 403
+    if request.method == 'POST':
+        d = request.get_json() or {}
+        if not (d.get('title') or '').strip():
+            return jsonify({"error":"Title is required"}), 400
+        db.execute("INSERT INTO homework (class_id, section_id, subject, title, description, due_date, assigned_by, school_id, created_at) "
+                   "VALUES (?,?,?,?,?,?,?,?,?)",
+                   (d.get('class_id') or None, d.get('section_id') or None, d.get('subject', ''),
+                    d.get('title'), d.get('description', ''), d.get('due_date') or None,
+                    u['id'], 1, datetime.datetime.now().isoformat()))
+        db.commit()
+        return jsonify({"ok":True})
+    hid = request.args.get('id')
+    row = db.execute("SELECT assigned_by FROM homework WHERE id=?", (hid,)).fetchone()
+    if not row:
+        return jsonify({"error":"Not found"}), 404
+    if u['role'] != 'admin' and row['assigned_by'] != u['id']:
+        return jsonify({"error":"Access denied: you can only edit your own assignment"}), 403
+    if request.method == 'PUT':
+        d = request.get_json() or {}
+        db.execute("UPDATE homework SET class_id=?, section_id=?, subject=?, title=?, description=?, due_date=? WHERE id=?",
+                   (d.get('class_id') or None, d.get('section_id') or None, d.get('subject', ''),
+                    d.get('title', ''), d.get('description', ''), d.get('due_date') or None, hid))
+        db.commit()
+        return jsonify({"ok":True})
+    db.execute("DELETE FROM homework WHERE id=?", (hid,))
+    db.commit()
+    return jsonify({"ok":True})
 
 # ---------- Static fallback ----------
 @app.route('/manifest.json')

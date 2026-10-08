@@ -9,10 +9,11 @@
 <meta name="backend-url" content="">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Attendance">
-<link rel="apple-touch-icon" href="/static/icon-192.png">
-<link rel="icon" type="image/png" href="/static/icon-192.png">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<link rel="icon" type="image/png" href="/icon-192.png">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Poppins:wght@600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="portal.css">
 </head>
 <body>
 <!-- LOGIN SCREEN -->
@@ -51,9 +52,73 @@
       <div class="pwd-wrap"><input id="loginPass" type="password" placeholder="••••••••" value="admin123" required autocomplete="current-password"><button type="button" onclick="togglePwd()" tabindex="-1">👁️</button></div>
       <div class="login-row"><label class="check"><input type="checkbox" id="rememberMe" checked> Remember Me</label><a href="#" onclick="toast('Contact Admin for reset');return false">Forgot Password?</a></div>
       <button id="loginBtn" type="submit" class="btn-primary btn-block">Login →</button>
-      <p class="login-hint">Demo: <b>admin/admin123</b> | <b>teacher/teacher123</b> | <b>student/student123</b> | <b>parent/parent123</b></p>
+      <p class="login-hint">Demo: <b>admin/admin123</b> | <b>teacher/teacher123</b></p>
       <p id="loginMsg" class="warn"></p>
+      <div class="login-alt-links">
+        <a href="#" onclick="showLoginCard('student');return false;">🎓 Student Login</a>
+        <a href="#" onclick="showLoginCard('parent');return false;">👨‍👩‍👧 Parent Login</a>
+      </div>
       <p class="muted sm">Not a member? <a href="#">Contact Admin</a></p>
+    </form>
+
+    <!-- STUDENT LOGIN -->
+    <form id="studentLoginForm" class="login-card hidden" onsubmit="doStudentLogin(event)" novalidate>
+      <div class="login-role-icon" aria-hidden="true">🎓</div>
+      <h2>Student Login</h2>
+      <p class="muted">Sign in with your Student ID</p>
+      <div id="studentLoginSchoolInfo" class="login-school-info">
+        <div id="studentLoginSchoolName" style="font-weight:700;color:var(--navy)"></div>
+      </div>
+      <label for="stIdent">Student ID / Admission Number *</label>
+      <input id="stIdent" placeholder="e.g. STU001" required autocomplete="username"
+             aria-describedby="stLoginMsg">
+      <label for="stPass">Password *</label>
+      <div class="pwd-wrap">
+        <input id="stPass" type="password" placeholder="••••••••" required autocomplete="current-password"
+               aria-describedby="stLoginMsg">
+        <button type="button" onclick="toggleStPwd()" aria-label="Show or hide password" tabindex="-1">👁️</button>
+      </div>
+      <div class="login-row">
+        <label class="check"><input type="checkbox" id="stRemember"> Remember Me</label>
+        <a href="#" onclick="forgotPassword('student');return false;">Forgot Password?</a>
+      </div>
+      <button id="stLoginBtn" type="submit" class="btn-primary btn-block">Login →</button>
+      <p class="login-hint">Demo: <b>STU001 / student123</b> <span class="muted">(or ADM-2010-0001)</span></p>
+      <p id="stLoginMsg" class="warn" role="alert"></p>
+      <div class="login-alt-links">
+        <a href="#" onclick="showLoginCard('parent');return false;">👨‍👩‍👧 Parent Login</a>
+        <a href="#" onclick="showLoginCard('staff');return false;">🏫 Staff Login</a>
+      </div>
+    </form>
+
+    <!-- PARENT LOGIN -->
+    <form id="parentLoginForm" class="login-card hidden" onsubmit="doParentLogin(event)" novalidate>
+      <div class="login-role-icon parent" aria-hidden="true">👨‍👩‍👧</div>
+      <h2>Parent Login</h2>
+      <p class="muted">Sign in to track your child's progress</p>
+      <div id="parentLoginSchoolInfo" class="login-school-info">
+        <div id="parentLoginSchoolName" style="font-weight:700;color:var(--navy)"></div>
+      </div>
+      <label for="parIdent">Parent ID / Registered Mobile *</label>
+      <input id="parIdent" placeholder="e.g. PAR-5012" required autocomplete="username"
+             aria-describedby="parLoginMsg">
+      <label for="parPass">Password / PIN *</label>
+      <div class="pwd-wrap">
+        <input id="parPass" type="password" placeholder="••••••••" required autocomplete="current-password"
+               aria-describedby="parLoginMsg">
+        <button type="button" onclick="toggleParPwd()" aria-label="Show or hide password" tabindex="-1">👁️</button>
+      </div>
+      <div class="login-row">
+        <label class="check"><input type="checkbox" id="parRemember"> Remember Me</label>
+        <a href="#" onclick="forgotPassword('parent');return false;">Forgot Password?</a>
+      </div>
+      <button id="parLoginBtn" type="submit" class="btn-primary btn-block">Login →</button>
+      <p class="login-hint">Demo: <b>PAR-5012 / parent123</b> <span class="muted">(or 9876543210)</span></p>
+      <p id="parLoginMsg" class="warn" role="alert"></p>
+      <div class="login-alt-links">
+        <a href="#" onclick="showLoginCard('student');return false;">🎓 Student Login</a>
+        <a href="#" onclick="showLoginCard('staff');return false;">🏫 Staff Login</a>
+      </div>
     </form>
   </div>
 </div>
@@ -81,6 +146,11 @@
       <button data-view="analytics"><span class="ico">📊</span> Analytics</button>
       <button data-view="notices"><span class="ico">📢</span> Notices</button>
       <button data-view="notifications"><span class="ico">🔔</span> Notifications</button>
+      <button data-view="attcal"><span class="ico">📅</span> My Attendance</button>
+      <button data-view="homework"><span class="ico">📝</span> Homework</button>
+      <button data-view="exams"><span class="ico">📊</span> Exam Report</button>
+      <button data-view="profile"><span class="ico">👤</span> Profile</button>
+      <button data-view="password"><span class="ico">🔑</span> Change Password</button>
       <button data-view="settings"><span class="ico">⚙️</span> Settings</button>
     </nav>
     <div class="nav-section-label">Quick Access</div>
@@ -89,6 +159,7 @@
       <button data-view="parents"><span class="ico">👨‍👩‍👧</span> Parents</button>
       <button data-view="messages"><span class="ico">💬</span> Messages</button>
       <button data-view="holidays"><span class="ico">📅</span> Holidays</button>
+      <button data-view="complaints"><span class="ico">🆘</span> Complaint Box</button>
       <button data-view="datesheet"><span class="ico">📋</span> Date Sheet</button>
       <button data-view="timetable"><span class="ico">🕒</span> Timetable</button>
       <button data-view="heatmap"><span class="ico">🗺️</span> Heatmap</button>
@@ -133,6 +204,9 @@
     <main id="content">
       <!-- DASHBOARD -->
       <section class="view active" id="view-dashboard">
+        <!-- Student / Parent portal home is rendered here; the staff KPI grid below
+             is hidden for those roles via #view-dashboard.portal-mode -->
+        <div id="portalHome" class="hidden" aria-live="polite"></div>
         <div class="page-head"><div><h2>Dashboard</h2><p>Welcome back, <span id="dashTeacher">Admin</span>! Academic Session: <b id="dashSession">2026–27</b></p></div><div class="page-actions"><button class="btn-outline" onclick="loadDashboard()">⟳ Refresh</button><span id="todayBadge" class="badge-date"></span></div></div>
         <div class="stat-grid six">
           <div class="stat-card blue"><div class="stat-icon">👥</div><div><small>Total Students</small><b id="kpiTotal">-</b><span class="trend up" id="kpiTotalSub"></span></div></div>
@@ -293,7 +367,7 @@
 
       <!-- CLASSES -->
       <section class="view" id="view-classes">
-        <div class="page-head"><div><h2>Classes & Sections</h2><p>Classes 1–12 • Section-wise management</p></div><div class="toolbar"><input id="newClass" placeholder="Class name e.g. 13"><button class="btn-primary" onclick="addClass()">+ Add Class</button></div></div>
+        <div class="page-head"><div><h2>Classes & Sections</h2><p>Classes 1–12 • Section-wise management</p></div><div class="toolbar" id="classToolbar"><input id="newClass" placeholder="Class name e.g. 13"><button class="btn-primary" onclick="addClass()">+ Add Class</button></div></div>
         <div class="card toolbar"><select id="secClass"></select><select id="newSec"><option value="">Select Section</option><option>A</option><option>B</option><option>C</option><option>D</option><option>E</option><option>F</option><option>G</option><option>H</option><option>I</option><option>J</option><option>K</option></select><button class="btn-outline" onclick="addSection()">+ Add Section</button><button class="btn-green" onclick="addSectionsAK()">＋ Add A-K</button><small class="muted">Sections A to K available</small></div>
         <div id="classGrid" class="class-grid"></div>
         <div id="sectionList" class="card"></div>
@@ -328,7 +402,7 @@
       <!-- DATESHEET -->
       <section class="view" id="view-datesheet">
         <div class="page-head"><h2>Date Sheet</h2></div>
-        <div class="card toolbar"><select id="dsClass"></select><select id="dsExam"><option>Unit Test 1</option><option>Unit Test 2</option><option>Mid-Term</option><option>Final-Term</option><option>Pre-Board</option></select><input id="dsSubject" placeholder="Subject"><input type="date" id="dsDate"><input type="time" id="dsTime"><button class="btn-primary" onclick="addDateSheet()">Add</button></div>
+        <div class="card toolbar" id="dsToolbar"><select id="dsClass"></select><select id="dsExam"><option>Unit Test 1</option><option>Unit Test 2</option><option>Mid-Term</option><option>Final-Term</option><option>Pre-Board</option></select><input id="dsSubject" placeholder="Subject"><input type="date" id="dsDate"><input type="time" id="dsTime"><button class="btn-primary" onclick="addDateSheet()">Add</button></div>
         <div id="dsTable" class="table-wrap card"></div>
       </section>
 
@@ -353,7 +427,8 @@
         <div class="card" style="margin-top:12px"><h3>⏱️ Temporary Class QR (expires, anti-duplicate)</h3>
           <div class="toolbar"><select id="qrTmpClass"></select><select id="qrTmpSection"></select><select id="qrTmpSubject"><option value="">No subject</option></select><button class="btn-primary" onclick="createTempQR()">Generate Temporary QR (5 min)</button></div>
           <div id="qrTempDisplay" class="qr-display"></div>
-          <div class="toolbar"><input id="qrTempToken" placeholder="Paste QR token"><input id="qrTempCode" placeholder="Student ID"><button class="btn-green" onclick="scanTempQR()">Verify & Mark</button></div>
+          <div class="toolbar"><input id="qrTempToken" placeholder="Paste QR token"><input id="qrTempCode" placeholder="Student ID"><button class="btn-green" onclick="scanTempQR()">Verify & Mark</button><button class="btn-navy" onclick="scanQRNative()">📷 Scan with Camera</button></div>
+          <small class="muted">Camera is used only for QR scanning. If permission is denied, paste the token manually.</small>
         </div>
       </section>
 
@@ -375,12 +450,12 @@
       <!-- NOTICES -->
       <section class="view" id="view-notices">
         <div class="page-head"><h2>Notice Board</h2></div>
-        <div class="card toolbar"><input id="noticeTitle" placeholder="Title"><input id="noticeContent" placeholder="Content"><button class="btn-primary" onclick="addNotice()">Post Notice</button></div>
+        <div class="card toolbar" id="noticeToolbar"><input id="noticeTitle" placeholder="Title"><input id="noticeContent" placeholder="Content"><button class="btn-primary" onclick="addNotice()">Post Notice</button></div>
         <div id="noticeList" class="notice-grid"></div>
       </section>
       <section class="view" id="view-enotes">
         <div class="page-head"><h2>E-Notes</h2></div>
-        <div class="card toolbar"><input id="noteTitle" placeholder="Title"><input id="noteSubject" placeholder="Subject"><input id="noteContent" placeholder="Content / Link"><button class="btn-primary" onclick="addENote()">Add Note</button></div>
+        <div class="card toolbar" id="enoteToolbar"><input id="noteTitle" placeholder="Title"><input id="noteSubject" placeholder="Subject"><input id="noteContent" placeholder="Content / Link"><button class="btn-primary" onclick="addENote()">Add Note</button></div>
         <div id="enoteList" class="card-grid"></div>
       </section>
       <section class="view" id="view-meals">
@@ -426,6 +501,71 @@
 
       <!-- MARKS INLINE FOR SETTINGS COMPAT -->
       <div id="marksEntry" class="card hidden"><h3>Enter Marks for <span id="marksStudentName"></span></h3><div id="marksInputs"></div><button class="btn-primary" onclick="saveMarks()">Save Marks</button></div>
+
+      <!-- ATTENDANCE CALENDAR (student / parent) -->
+      <section class="view" id="view-attcal">
+        <div class="page-head">
+          <div><h2>Attendance Calendar</h2><p id="attCalSub" class="muted"></p></div>
+          <div class="page-actions">
+            <button class="btn-outline" onclick="shiftAttCal(-1)" aria-label="Previous month">‹ Prev</button>
+            <span id="attCalMonth" class="badge-date"></span>
+            <button class="btn-outline" onclick="shiftAttCal(1)" aria-label="Next month">Next ›</button>
+          </div>
+        </div>
+        <div id="attCalStats" class="stat-grid"></div>
+        <div class="card" style="margin-top:12px"><div id="attCalGrid" class="att-cal"></div>
+          <div class="att-legend">
+            <span><i class="sw p"></i> Present</span>
+            <span><i class="sw a"></i> Absent</span>
+            <span><i class="sw l"></i> Leave</span>
+            <span><i class="sw t"></i> Late</span>
+            <span><i class="sw h"></i> Holiday</span>
+            <span><i class="sw n"></i> Not marked</span>
+          </div>
+        </div>
+        <div class="card" style="margin-top:12px"><h3>Recent days</h3><div id="attCalList" class="table-wrap"></div></div>
+      </section>
+
+      <!-- HOMEWORK (student / parent) -->
+      <section class="view" id="view-homework">
+        <div class="page-head"><div><h2>Homework</h2><p id="hwSub" class="muted"></p></div>
+          <div class="page-actions"><button class="btn-outline" onclick="loadHomeworkView()">⟳ Refresh</button></div></div>
+        <div id="hwStats" class="stat-grid"></div>
+        <div id="homeworkList" class="card-grid" style="margin-top:12px"></div>
+      </section>
+
+      <!-- EXAM REPORT & MARKS (student / parent) -->
+      <section class="view" id="view-exams">
+        <div class="page-head"><div><h2>Exam Report & Marks</h2><p id="examSub" class="muted"></p></div>
+          <div class="page-actions"><button class="btn-outline" onclick="loadExamReport()">⟳ Refresh</button></div></div>
+        <div id="examOverall" class="stat-grid"></div>
+        <div id="examList" style="margin-top:12px"></div>
+      </section>
+
+      <!-- PROFILE SETTINGS (student / parent / staff) -->
+      <section class="view" id="view-profile">
+        <div class="page-head"><h2>Profile Settings</h2></div>
+        <div id="profileCard" class="grid-2"></div>
+      </section>
+
+      <!-- CHANGE PASSWORD -->
+      <section class="view" id="view-password">
+        <div class="page-head"><h2>Change Password</h2></div>
+        <div class="card" style="max-width:480px">
+          <h3>🔐 Update your password</h3>
+          <label for="curPw">Current Password *</label>
+          <div class="pwd-wrap"><input id="curPw" type="password" autocomplete="current-password" required>
+            <button type="button" onclick="toggleField('curPw')" aria-label="Show or hide password" tabindex="-1">👁️</button></div>
+          <label for="newPw">New Password * <small class="muted">(min 6 characters)</small></label>
+          <div class="pwd-wrap"><input id="newPw" type="password" autocomplete="new-password" required>
+            <button type="button" onclick="toggleField('newPw')" aria-label="Show or hide password" tabindex="-1">👁️</button></div>
+          <label for="confPw">Confirm New Password *</label>
+          <div class="pwd-wrap"><input id="confPw" type="password" autocomplete="new-password" required>
+            <button type="button" onclick="toggleField('confPw')" aria-label="Show or hide password" tabindex="-1">👁️</button></div>
+          <p id="pwMsg" class="warn" role="alert"></p>
+          <button class="btn-primary btn-block" onclick="changePassword()">Update Password</button>
+        </div>
+      </section>
 
       <!-- ACCESS DENIED -->
       <section class="view" id="view-denied">
@@ -525,10 +665,11 @@
   <button data-mview="studentid" onclick="navigate('studentid')">👤<span>Profile</span></button>
 </nav>
 <div id="toast"></div>
+<script src="portal.js"></script>
 <script src="app.js"></script>
 <script>
 if('serviceWorker' in navigator){
-  navigator.serviceWorker.register('/static/sw.js').then(()=>console.log('SW registered')).catch(e=>console.log('SW fail',e));
+  navigator.serviceWorker.register('/sw.js').then(()=>console.log('SW registered')).catch(e=>console.log('SW fail',e));
 }
 </script>
 </body>
