@@ -396,6 +396,20 @@ def init_db():
             """)
     except Exception as e:
         pass
+    # One-time repair: rows written before the idempotent-save fix could stack
+    # up (SQLite treats NULL as distinct in UNIQUE()). Keep only the newest
+    # mark per student/date/subject so report maths stays honest.
+    try:
+        db.execute("""
+            DELETE FROM attendance
+             WHERE id NOT IN (
+                 SELECT MAX(id) FROM attendance
+                  GROUP BY student_id, date, COALESCE(subject_id, -1)
+             )
+        """)
+        db.commit()
+    except Exception:
+        pass
     # seed academic sessions
     try:
         if db.execute("SELECT COUNT(*) FROM academic_sessions").fetchone()[0]==0:
@@ -1198,11 +1212,18 @@ def attendance_api():
         else:
             old=db.execute("SELECT status FROM attendance WHERE student_id=? AND date=? AND (subject_id IS NULL OR subject_id='')", (sid,date)).fetchone()
         old_status=old[0] if old else None
+        # Idempotent write: SQLite treats NULL as distinct inside UNIQUE(), so
+        # INSERT OR REPLACE kept stacking duplicate rows for the daily
+        # (subject-less) slot. Clear the slot first, then insert one row.
         if subject_id:
-            db.execute("INSERT OR REPLACE INTO attendance (student_id,date,status,leave_reason,subject_id,time,marked_by,marked_at,session) VALUES (?,?,?,?,?,?,?,?,?)",
+            db.execute("DELETE FROM attendance WHERE student_id=? AND date=? AND subject_id=?",
+                       (sid, date, subject_id))
+            db.execute("INSERT INTO attendance (student_id,date,status,leave_reason,subject_id,time,marked_by,marked_at,session) VALUES (?,?,?,?,?,?,?,?,?)",
                        (sid, date, st, e.get('leave_reason',''), subject_id, tm, u['id'], now, session_name))
         else:
-            db.execute("INSERT OR REPLACE INTO attendance (student_id,date,status,leave_reason,time,marked_by,marked_at,session) VALUES (?,?,?,?,?,?,?,?)",
+            db.execute("DELETE FROM attendance WHERE student_id=? AND date=? AND (subject_id IS NULL OR subject_id='')",
+                       (sid, date))
+            db.execute("INSERT INTO attendance (student_id,date,status,leave_reason,time,marked_by,marked_at,session) VALUES (?,?,?,?,?,?,?,?)",
                        (sid, date, st, e.get('leave_reason',''), tm, u['id'], now, session_name))
         if old_status and old_status!=st:
             db.execute("INSERT INTO attendance_logs (student_id,date,old_status,new_status,changed_by,changed_at,note) VALUES (?,?,?,?,?,?,?)",
@@ -1249,18 +1270,11 @@ def attendance_dashboard():
     if class_id: sql+=" AND class_id=?"; params.append(class_id)
     if section_id: sql+=" AND section_id=?"; params.append(section_id)
     total=db.execute(sql, params).fetchone()[0]
-    # present etc
-    sql2="SELECT status, COUNT(*) c FROM attendance a JOIN students s ON s.id=a.student_id WHERE a.date=? "
-    params2=[date]
-    if class_id: sql2+=" AND s.class_id=?"; params2.append(class_id)
-    if section_id: sql2+=" AND s.section_id=?"; params2.append(section_id)
-    if subject_id: sql2+=" AND a.subject_id=?"; params2.append(subject_id)
-    sql2+=" GROUP BY status"
-    rows=db.execute(sql2, params2).fetchall()
-    m={r['status']:r['c'] for r in rows}
-    present=m.get('P',0); absent=m.get('A',0); leave=m.get('L',0); late=m.get('T',0)
+    # present etc — newest mark per student (never raw rows)
+    mm=status_counts(db, date=date, class_id=class_id, section_id=section_id, subject_id=subject_id)
+    present=mm.get('P',0); absent=mm.get('A',0); leave=mm.get('L',0); late=mm.get('T',0)
     not_marked= total - present - absent - leave - late
-    pct= round(((present+late)/total*100) if total else 0,1)
+    pct= round(min(((present+late)/total*100) if total else 0, 100.0),1)
     # weekday
     try: dow=datetime.datetime.strptime(date, "%Y-%m-%d").strftime("%A")
     except: dow=""
@@ -1299,6 +1313,45 @@ def sessions_api():
     db.commit()
     return jsonify({"ok":True})
 
+# ---------- Attendance maths helper ----------
+def status_counts(db, date=None, month=None, class_id=None, section_id=None,
+                  subject_id=None, scope_sql="", scope_params=()):
+    """Status -> number of *students* for a date (or a whole month).
+
+    A student can legitimately be marked once per subject, and rows written
+    before the idempotent-save fix could repeat, so counting raw rows would
+    double-count people and push percentages past 100. We keep only the newest
+    mark per student per date instead.
+    """
+    where = "a.date=?" if date else "substr(a.date,1,7)=?"
+    head_params = []
+    slot = "1=1"
+    if subject_id:
+        slot = "x.subject_id=?"
+        head_params.append(subject_id)
+    tail = " WHERE " + where
+    tail_params = [date or month]
+    if class_id:
+        tail += " AND s.class_id=?"; tail_params.append(class_id)
+    if section_id:
+        tail += " AND s.section_id=?"; tail_params.append(section_id)
+    if scope_sql:
+        tail += scope_sql; tail_params.extend(scope_params)
+    if subject_id:
+        tail += " AND a.subject_id=?"; tail_params.append(subject_id)
+    sql = (
+        "SELECT status, COUNT(*) c FROM ("
+        "  SELECT a.date AS d, ("
+        "    SELECT x.status FROM attendance x"
+        "     WHERE x.student_id=a.student_id AND x.date=a.date AND " + slot +
+        "     ORDER BY x.id DESC LIMIT 1) AS status"
+        "  FROM attendance a JOIN students s ON s.id=a.student_id" + tail +
+        "  GROUP BY a.student_id, a.date"
+        ") WHERE status IS NOT NULL GROUP BY status"
+    )
+    rows = db.execute(sql, head_params + tail_params).fetchall()
+    return {r['status']: r['c'] for r in rows}
+
 # ---------- Attendance Calendar (monthly day-wise) ----------
 @app.route('/api/calendar')
 def calendar_api():
@@ -1311,18 +1364,20 @@ def calendar_api():
     y,m=month.split('-')
     y=int(y); m=int(m)
     days=calmod.monthrange(y,m)[1]
+    # RBAC: aggregate calendar is school-wide, but students/parents only get
+    # the rows they are allowed to read.
+    allowed = readable_student_ids(get_current_user())
+    scope_sql = "" if allowed is None else (
+        " AND s.id IN (%s)" % (",".join("?" * len(allowed)) if allowed else "-1")
+    )
     out=[]
     for d in range(1, days+1):
         ds=f"{y:04d}-{m:02d}-{d:02d}"
-        sql="SELECT status, COUNT(*) c FROM attendance a JOIN students s ON s.id=a.student_id WHERE a.date=? "
-        params=[ds]
-        if class_id: sql+=" AND s.class_id=?"; params.append(class_id)
-        if section_id: sql+=" AND s.section_id=?"; params.append(section_id)
-        sql+=" GROUP BY status"
-        rows=db.execute(sql, params).fetchall()
-        mm={r['status']:r['c'] for r in rows}
+        mm = status_counts(db, date=ds, class_id=class_id, section_id=section_id,
+                           scope_sql=scope_sql,
+                           scope_params=(sorted(allowed) if allowed is not None else []))
         total=sum(mm.values())
-        pct=round(((mm.get('P',0)+mm.get('T',0))/total*100) if total else 0,1)
+        pct=round(min(((mm.get('P',0)+mm.get('T',0))/total*100) if total else 0, 100.0),1)
         out.append({"date":ds,"weekday":datetime.datetime.strptime(ds,"%Y-%m-%d").strftime("%a"),"present":mm.get('P',0),"absent":mm.get('A',0),"leave":mm.get('L',0),"late":mm.get('T',0),"total":total,"percentage":pct,"is_holiday":is_holiday(ds)})
     return jsonify({"month":month,"days":out})
 
@@ -1332,19 +1387,17 @@ def analytics_api():
     db=get_db()
     class_id=request.args.get('class_id')
     section_id=request.args.get('section_id')
+    # RBAC: students/parents may only ever read their own (or their linked
+    # children's) rows. None == unrestricted for admin/teacher.
+    allowed = readable_student_ids(get_current_user())
+    restricted = allowed is not None
     # weekly last 7 days
     weekly=[]
     for i in range(6,-1,-1):
         d=(datetime.date.today()-datetime.timedelta(days=i)).isoformat()
-        sql="SELECT status, COUNT(*) c FROM attendance a JOIN students s ON s.id=a.student_id WHERE a.date=? "
-        params=[d]
-        if class_id: sql+=" AND s.class_id=?"; params.append(class_id)
-        if section_id: sql+=" AND s.section_id=?"; params.append(section_id)
-        sql+=" GROUP BY status"
-        rows=db.execute(sql, params).fetchall()
-        mm={r['status']:r['c'] for r in rows}
+        mm = status_counts(db, date=d, class_id=class_id, section_id=section_id)
         total=sum(mm.values())
-        pct=round(((mm.get('P',0)+mm.get('T',0))/total*100) if total else 0,1)
+        pct=round(min(((mm.get('P',0)+mm.get('T',0))/total*100) if total else 0, 100.0),1)
         weekly.append({"date":d,"present":mm.get('P',0),"absent":mm.get('A',0),"late":mm.get('T',0),"leave":mm.get('L',0),"percentage":pct})
     # monthly last 6 months
     monthly=[]
@@ -1353,24 +1406,19 @@ def analytics_api():
         yy=today.year; mm_=today.month-k
         while mm_<=0: mm_+=12; yy-=1
         mkey=f"{yy:04d}-{mm_:02d}"
-        sql="SELECT status, COUNT(*) c FROM attendance a JOIN students s ON s.id=a.student_id WHERE substr(a.date,1,7)=? "
-        params=[mkey]
-        if class_id: sql+=" AND s.class_id=?"; params.append(class_id)
-        if section_id: sql+=" AND s.section_id=?"; params.append(section_id)
-        sql+=" GROUP BY status"
-        rows=db.execute(sql, params).fetchall()
-        mm={r['status']:r['c'] for r in rows}
+        mm = status_counts(db, month=mkey, class_id=class_id, section_id=section_id)
         total=sum(mm.values())
-        pct=round(((mm.get('P',0)+mm.get('T',0))/total*100) if total else 0,1)
+        pct=round(min(((mm.get('P',0)+mm.get('T',0))/total*100) if total else 0, 100.0),1)
         monthly.append({"month":mkey,"percentage":pct,"present":mm.get('P',0),"absent":mm.get('A',0)})
     # class comparison
     comp=[]
-    for r in db.execute("SELECT id, name FROM classes ORDER BY CAST(name AS INTEGER) LIMIT 12"):
-        sql="SELECT COUNT(*) FROM students WHERE class_id=?"; params=[r['id']]
-        total=db.execute(sql, params).fetchone()[0]
-        prow=db.execute("SELECT COUNT(*) FROM attendance a JOIN students s ON s.id=a.student_id WHERE s.class_id=? AND a.status IN ('P','T')", (r['id'],)).fetchone()[0]
-        arow=db.execute("SELECT COUNT(*) FROM attendance WHERE date=? AND status='P'", (datetime.date.today().isoformat(),)).fetchone()[0]
-        comp.append({"class":r['name'],"total":total,"present_records":prow})
+    if not restricted:
+        for r in db.execute("SELECT id, name FROM classes ORDER BY CAST(name AS INTEGER) LIMIT 12"):
+            sql="SELECT COUNT(*) FROM students WHERE class_id=?"; params=[r['id']]
+            total=db.execute(sql, params).fetchone()[0]
+            prow=db.execute("SELECT COUNT(*) FROM attendance a JOIN students s ON s.id=a.student_id WHERE s.class_id=? AND a.status IN ('P','T')", (r['id'],)).fetchone()[0]
+            arow=db.execute("SELECT COUNT(*) FROM attendance WHERE date=? AND status='P'", (datetime.date.today().isoformat(),)).fetchone()[0]
+            comp.append({"class": r["name"], "total": total, "present_records": prow})
     # low attendance students (<75% this month)
     mkey=today.strftime("%Y-%m")
     holidays_set=set(x[0] for x in db.execute("SELECT date FROM holidays").fetchall())
@@ -1383,6 +1431,8 @@ def analytics_api():
     if section_id: sql+=" AND s.section_id=?"; params.append(section_id)
     low=[]; high=[]
     for s in db.execute(sql, params).fetchall():
+        if restricted and (allowed is None or int(s['id']) not in allowed):
+            continue
         p=db.execute("SELECT COUNT(*) FROM attendance WHERE student_id=? AND status IN ('P','T') AND substr(date,1,7)=?", (s['id'], mkey)).fetchone()[0]
         pct=round(p/working*100,1) if working else 0
         entry={"student_id":s['student_id'],"name":s['name'],"percentage":pct,"present":p}
@@ -1610,11 +1660,19 @@ def monthly_api():
     students=db.execute(sql, params).fetchall()
     out=[]
     for s in students:
-        # counts
-        present=db.execute("SELECT COUNT(*) FROM attendance WHERE student_id=? AND status='P' AND substr(date,1,7)=?", (s['id'], month)).fetchone()[0]
-        absent=db.execute("SELECT COUNT(*) FROM attendance WHERE student_id=? AND status='A' AND substr(date,1,7)=?", (s['id'], month)).fetchone()[0]
-        leave=db.execute("SELECT COUNT(*) FROM attendance WHERE student_id=? AND status='L' AND substr(date,1,7)=?", (s['id'], month)).fetchone()[0]
-        pct= round(present/len(working)*100,1) if working else 0
+        # one mark per date — a student can appear once per subject, and raw
+        # row counts would let "present" exceed the number of working days.
+        mc={row[0]: row[1] for row in db.execute(
+            "SELECT status, COUNT(*) c FROM ("
+            "  SELECT date, (SELECT x.status FROM attendance x"
+            "                 WHERE x.student_id=a.student_id AND x.date=a.date"
+            "                 ORDER BY x.id DESC LIMIT 1) AS status"
+            "    FROM attendance a WHERE a.student_id=? AND substr(a.date,1,7)=?"
+            "   GROUP BY date"
+            ") WHERE status IS NOT NULL GROUP BY status",
+            (s['id'], month)).fetchall()}
+        present=mc.get('P',0); absent=mc.get('A',0); leave=mc.get('L',0)
+        pct= round(min(present/len(working)*100, 100.0),1) if working else 0
         out.append({"student":dict(s), "present":present, "absent":absent, "leave":leave, "working_days":len(working), "pct":pct})
     return jsonify({"month":month, "working_days":len(working), "working_dates":working, "students":out})
 

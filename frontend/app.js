@@ -62,7 +62,15 @@ function showDenied(role, view){
   if(r) r.textContent = role + ' → ' + view;
 }
 
-function toast(msg, ok=true){ const t=document.createElement('div'); t.className='toast'; t.textContent=msg; t.style.background=ok?'#0f172a':'#dc2626'; const c=$('#toast'); if(c) c.appendChild(t); setTimeout(()=>t.remove(),3000); }
+function toast(msg, ok=true){
+  const t=document.createElement('div');
+  t.className='toast '+(ok?'ok':'err');
+  t.setAttribute('role','status');
+  t.innerHTML=icon(ok?'circle-check':'circle-alert')+'<span></span>';
+  t.querySelector('span').textContent=msg;
+  const c=$('#toast'); if(c) c.appendChild(t);
+  setTimeout(()=>{ t.style.opacity='0'; t.style.transform='translateY(8px)'; setTimeout(()=>t.remove(),250); },3200);
+}
 function togglePwd(){ const i=$('#loginPass'); i.type=i.type==='password'?'text':'password'; }
 async function api(p,opts={}){
   opts.credentials = opts.credentials || 'same-origin';
@@ -106,11 +114,13 @@ function navigate(v){
   }
   $$('#nav button, .nav-mini button').forEach(b=>b.classList.toggle('active', b.dataset.view===v));
   $$('.view').forEach(s=>s.classList.toggle('active', s.id==='view-'+v));
+  syncMobileNav(v);
+  closeMoreSheet();
   syncStaffOnlyControls();
   if(v==='features') v='features';
   const t=document.querySelector(`[data-view="${v}"]`)?.textContent?.trim() || v;
   const pt=$('#pageTitle'); if(pt) pt.textContent=t;
-  if(innerWidth<900) $('#sidebar')?.classList.remove('open');
+  if(innerWidth<900) closeSidebar();
   if(v==='dashboard') loadDashboard();
   if(v==='students') loadStudents();
   if(v==='attendance') initAttendance();
@@ -129,7 +139,7 @@ function navigate(v){
   if(v==='messages') loadWhatsApp();
   if(v==='holidays') loadHolidays();
   if(v==='datesheet') loadDateSheets();
-  if(v==='reports') {loadMarksReport(); initMarksChips();}
+  if(v==='reports') {initReports(); loadMarksReport(); initMarksChips();}
   if(v==='qr') {}
   if(v==='notices') loadNotices();
   if(v==='enotes') loadENotes();
@@ -142,6 +152,8 @@ function navigate(v){
   if(v==='scholarship') loadScholarships();
   if(v==='complaints') loadComplaints();
   if(v==='settings') loadSettings();
+  syncMobileNav(v);
+  setTimeout(paintIcons,50);
 }
 $$('#nav button, .nav-mini button').forEach(b=>b.addEventListener('click',()=>navigate(b.dataset.view)));
 const mb=$('#menuBtn'); if(mb) mb.onclick=()=>$('#sidebar').classList.toggle('open');
@@ -161,19 +173,22 @@ async function loadLoginSchoolInfo(){
     const s=await fetch(BACKEND_URL + '/api/settings',{credentials:'same-origin'}).then(r=>r.json());
     const name=s.school_name||'Dynamic Attendance App';
     const logo=s.logo_path;
-    // left side
+    // left panel keeps the Dynamic CuroBase brand; the school name goes in the sub-line
     const leftH1=document.querySelector('.login-left h1');
-    if(leftH1) leftH1.textContent=name;
+    if(leftH1) leftH1.textContent='Dynamic CuroBase';
+    const leftSub=document.querySelector('.login-left .sub');
+    if(leftSub) leftSub.textContent=name;
     const loginLogo=$('#loginLogo'), loginName=$('#loginSchoolName');
     if(loginName) loginName.textContent=name;
     ['#studentLoginSchoolName','#parentLoginSchoolName'].forEach(sel=>{
       const e2=document.querySelector(sel); if(e2) e2.textContent=name;
     });
+    const brandIcon=document.getElementById('loginBrandIcon');
     if(loginLogo && logo){
       loginLogo.src=`${BACKEND_URL}/api/logo/${logo}`;
       loginLogo.classList.remove('hidden');
+      if(brandIcon) brandIcon.innerHTML=`<img src="${BACKEND_URL}/api/logo/${logo}" alt="">`;
     }
-    // also update topbar if already logged
   }catch(e){}
 }
 async function doLogin(e){
@@ -183,7 +198,7 @@ async function doLogin(e){
   const u=$('#loginUser').value.trim(), p=$('#loginPass').value;
   const msgEl=$('#loginMsg'), btn=$('#loginBtn');
   if(!u || !p){ if(msgEl) msgEl.textContent='Username and password required'; toast('Username and password required',false); return; }
-  if(btn){ btn.disabled=true; btn.textContent='Logging in...'; }
+  if(btn){ btn.disabled=true; btn.classList.add('btn-loading'); btn.innerHTML='<span class="spinner"></span> Signing in…'; }
   if(msgEl) msgEl.textContent='';
   try{
     // Remember Me
@@ -204,12 +219,13 @@ async function doLogin(e){
     const dt=$('#dashTeacher'); if(dt) dt.textContent=j.user.username;
     const bd=$('#bellDot'); if(bd) bd.style.display='none';
     filterNavByRole(role);
+    buildMobileNav();
     toast('Welcome '+j.user.username+' ('+role+')');
     // role-based redirect: all go to dashboard which adapts per role
     navigate('dashboard');
     loadDashboard(); loadClasses(); loadSettings();
   }catch(e){ if(msgEl) msgEl.textContent=e.message; toast(e.message,false); }
-  finally{ if(btn){ btn.disabled=false; btn.textContent='Login →'; } }
+  finally{ if(btn){ btn.disabled=false; btn.classList.remove('btn-loading'); btn.innerHTML='Login '+icon('arrow-right'); } }
 }
 // init time badge
 setInterval(()=>{ const b=$('#todayBadge'); if(b) b.textContent=new Date().toLocaleDateString('en-IN',{weekday:'short',day:'2-digit',month:'short',year:'numeric'}); },1000);
@@ -220,7 +236,7 @@ async function loadClasses(){
   const data=await api('/api/classes'); state.classes=data;
   const opts=data.map(c=>`<option value="${c.id}">${c.name}</option>`).join('');
   const allOpts='<option value="">All / Select</option>'+opts;
-  ['#s_class','#attClass','#monClass','#repClass','#secClass','#waClass','#dsClass','#mealClass','#f_class','#calClass','#anaClass','#ttClass','#qrTmpClass'].forEach(sel=>{ const el=$(sel); if(el) el.innerHTML=allOpts; });
+  ['#s_class','#attClass','#monClass','#repClass','#secClass','#waClass','#dsClass','#mealClass','#f_class','#calClass','#anaClass','#ttClass','#qrTmpClass','#repAClass'].forEach(sel=>{ const el=$(sel); if(el) el.innerHTML=allOpts; });
   try{
     const subs=await api('/api/subjects');
     const sopts='<option value="">No subject</option>'+subs.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
@@ -250,14 +266,14 @@ async function loadClasses(){
   }catch(e){ if(e.message.includes('Access denied')) showDenied(state.role||'guest','classes'); }
 }
 function filterSection(sel){
-  const map={'#s_section':'#s_class','#attSection':'#attClass','#monSection':'#monClass','#waSection':'#waClass','#f_section':'#f_class','#calSection':'#calClass','#anaSection':'#anaClass'};
+  const map={'#s_section':'#s_class','#attSection':'#attClass','#monSection':'#monClass','#waSection':'#waClass','#f_section':'#f_class','#calSection':'#calClass','#anaSection':'#anaClass','#repASection':'#repAClass'};
   const classSel=map[sel]; if(!classSel) return;
   const cid=$(classSel)?.value; const el=$(sel); if(!el) return;
   if(!cid){ el.innerHTML='<option value="">All / Select</option>'; return; }
   const cls=state.classes.find(x=>x.id==cid);
   el.innerHTML='<option value="">All / Select</option>'+(cls?.sections||[]).map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
 }
-function filterSections(){ ['#s_section','#attSection','#monSection','#waSection','#f_section','#calSection','#anaSection'].forEach(s=>filterSection(s)); }
+function filterSections(){ ['#s_section','#attSection','#monSection','#waSection','#f_section','#calSection','#anaSection','#repASection'].forEach(s=>filterSection(s)); }
 async function addClass(){ if(state.role!=='admin') return toast('Admin only',false); const n=$('#newClass').value.trim(); if(!n) return; try{await api('/api/classes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n})}); $('#newClass').value=''; loadClasses(); toast('Class added');}catch(e){toast(e.message,false)} }
 async function delClass(id){ if(state.role!=='admin') return toast('Admin only',false); if(!confirm('Delete class?')) return; try{await api('/api/classes?id='+id,{method:'DELETE'}); loadClasses(); toast('Deleted');}catch(e){toast(e.message,false)} }
 async function addSection(){ if(state.role!=='admin') return toast('Admin only',false); const cid=$('#secClass').value, name=$('#newSec').value.trim(); if(!cid||!name) return toast('Select class & section (A-K)',false); try{await api('/api/sections',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({class_id:cid,name})}); loadClasses(); toast('Section '+name+' added');}catch(e){toast(e.message,false)} }
@@ -329,6 +345,8 @@ async function loadDashboard(){
   }catch(e){} }
   loadNotifBadge();
   loadCommandCenter();
+  loadRecentActivity();
+  const dsl=$('#dashSchoolLine'); if(dsl) dsl.textContent=s.school_name||'Smart School Attendance Management System';
   }catch(e){ console.error('dashboard',e); if(!String(e.message||'').includes('Access denied')) toast('Dashboard load failed',false); }
 }
 
@@ -454,11 +472,11 @@ async function loadAttendance(){
   let dash; try{ dash=await api(`/api/attendance/dashboard?date=${date}&class_id=${cid}&section_id=${sid}&subject_id=${subj}`); }catch(e){ dash={total:0, present:0, absent:0, leave:0, late:0, not_marked:0, percentage:0}; }
   const totalSys=dash.total||0;
   const sumEl=$('#attSummary'); if(sumEl) sumEl.innerHTML=`
-    <div class="stat-card green"><div class="stat-icon">✅</div><div><small>Present</small><b>${dash.present}</b></div></div>
-    <div class="stat-card red"><div class="stat-icon">❌</div><div><small>Absent</small><b>${dash.absent}</b></div></div>
-    <div class="stat-card yellow"><div class="stat-icon">🟡</div><div><small>Late</small><b>${dash.late||0}</b></div></div>
-    <div class="stat-card blue"><div class="stat-icon">🔵</div><div><small>Leave</small><b>${dash.leave}</b></div></div>
-    <div class="stat-card blue"><div class="stat-icon">📊</div><div><small>Total / %</small><b>${totalSys} • ${dash.percentage}%</b></div></div>`;
+    <div class="stat-card green"><div class="stat-icon">${icon('circle-check')}</div><div><small>Present</small><b>${dash.present}</b></div></div>
+    <div class="stat-card red"><div class="stat-icon">${icon('circle-x')}</div><div><small>Absent</small><b>${dash.absent}</b></div></div>
+    <div class="stat-card yellow"><div class="stat-icon">${icon('clock')}</div><div><small>Late</small><b>${dash.late||0}</b></div></div>
+    <div class="stat-card blue"><div class="stat-icon">${icon('user')}</div><div><small>Leave</small><b>${dash.leave}</b></div></div>
+    <div class="stat-card blue"><div class="stat-icon">${icon('chart-column')}</div><div><small>Total / %</small><b>${totalSys} • ${dash.percentage}%</b></div></div>`;
   let rows=data.students;
   if(q) rows=rows.filter(s=>(s.name+' '+(s.student_id||'')+' '+(s.roll_no||'')).toLowerCase().includes(q));
   const cnt=$('#attCount'); if(cnt) cnt.textContent=`${rows.length} students`;
@@ -554,10 +572,10 @@ async function loadMonthly(){
   let data; try{ data=await api(`/api/monthly?month=${month}&class_id=${cid}&section_id=${sid}`); }catch(e){ toast(e.message,false); return; }
   if(!data){ return; }
   const monStats=$('#monStats'); if(monStats) monStats.innerHTML=`
-    <div class="stat-card blue"><div class="stat-icon">👨‍🎓</div><div><small>Total Students</small><b>${data.students.length}</b></div></div>
-    <div class="stat-card green"><div class="stat-icon">✅</div><div><small>Avg Present</small><b>${Math.round(data.students.reduce((a,c)=>a+c.present,0)/Math.max(1,data.students.length))}</b></div></div>
-    <div class="stat-card red"><div class="stat-icon">❌</div><div><small>Working Days</small><b>${data.working_days}</b></div></div>
-    <div class="stat-card yellow"><div class="stat-icon">📊</div><div><small>Month</small><b>${month}</b></div></div>`;
+    <div class="stat-card blue"><div class="stat-icon">${icon('graduation-cap')}</div><div><small>Total Students</small><b>${data.students.length}</b></div></div>
+    <div class="stat-card green"><div class="stat-icon">${icon('circle-check')}</div><div><small>Avg Present</small><b>${Math.round(data.students.reduce((a,c)=>a+c.present,0)/Math.max(1,data.students.length))}</b></div></div>
+    <div class="stat-card red"><div class="stat-icon">${icon('calendar')}</div><div><small>Working Days</small><b>${data.working_days}</b></div></div>
+    <div class="stat-card yellow"><div class="stat-icon">${icon('table-2')}</div><div><small>Month</small><b>${month}</b></div></div>`;
   const monTable=$('#monTable');
   if(monTable) monTable.innerHTML=`<table><thead><tr><th>Photo</th><th>Student Name</th><th>Present</th><th>Absent</th><th>Leave</th><th>%</th></tr></thead><tbody>`+data.students.map(s=>`<tr><td><img src="https://ui-avatars.com/api/?name=${encodeURIComponent(s.student.name)}&background=2563eb&color=fff&size=32" class="avatar"></td><td><b>${s.student.name}</b><br><small>${s.student.student_id} • ${s.student.roll_no||''}</small></td><td><span class="badge P">${s.present}</span></td><td><span class="badge A">${s.absent}</span></td><td><span class="badge L">${s.leave}</span></td><td><span class="badge ${s.pct>=90?'P':s.pct>=75?'L':'A'}">${s.pct}%</span></td></tr>`).join('')+`</tbody></table>`;
   const monInfo=$('#monInfo'); if(monInfo) monInfo.textContent=`Working Days: ${data.working_days} — ${data.working_dates.slice(0,3).join(', ')} ...`;
@@ -595,9 +613,56 @@ async function delParent(id){ if(state.role!=='admin') return toast('Admin only'
 async function loadWhatsApp(){ let data; try{ data=await api('/api/whatsapp'); }catch(e){ data=[]; } const el=$('#waList'); if(!el) return; el.innerHTML=data.length? `<table><thead><tr><th>Class</th><th>Section</th><th>Link</th></tr></thead><tbody>`+data.map(w=>`<tr><td>${w.class_name||w.class_id}</td><td>${w.section_name||w.section_id}</td><td><a href="${w.link}" target="_blank">${w.link}</a></td></tr>`).join('')+`</tbody></table>` : `<div class="muted" style="padding:16px">No WhatsApp groups yet.</div>`; }
 async function saveWhatsApp(){ if(!['admin','teacher'].includes(state.role)) return toast('Access denied',false); const c=$('#waClass').value, s=$('#waSection').value, link=$('#waLink').value.trim(); if(!c||!s||!link) return toast('All fields required',false); try{await api('/api/whatsapp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({class_id:c,section_id:s,link})}); loadWhatsApp(); toast('Group saved');}catch(e){toast(e.message,false)} }
 
-async function loadDateSheets(){ let data; try{ data = (state.role==='student'||state.role==='parent')
+let _dsTab='upcoming';
+function setDsTab(t){
+  _dsTab=t;
+  document.querySelectorAll('#dsTabs button').forEach(b=>b.classList.toggle('active', b.dataset.ds===t));
+  renderDateSheets();
+}
+async function loadDateSheets(){
+  const el=$('#dsTable'); if(!el) return;
+  el.innerHTML='<div class="sk-wrap"><div class="sk sk-row"></div><div class="sk sk-row"></div><div class="sk sk-row"></div></div>';
+  let data;
+  try{
+    data = (state.role==='student'||state.role==='parent')
       ? ((await api('/api/portal/datesheet'+(childQs()?'?'+childQs().slice(1):''))).datesheet||[])
-      : await api('/api/datesheets'); }catch(e){ data=[]; } const el=$('#dsTable'); if(!el) return; el.innerHTML=data.length? `<table><thead><tr><th>Class</th><th>Exam</th><th>Subject</th><th>Date</th><th>Time</th><th></th></tr></thead><tbody>`+data.map(d=>`<tr><td>${d.class_name||d.class_id}</td><td>${d.exam_type}</td><td>${d.subject}</td><td>${d.date}</td><td>${d.time||''}</td><td>${state.role==='admin'?`<button class="btn-red" onclick="delDS(${d.id})">Delete</button>`:''}</td></tr>`).join('')+`</tbody></table>` : `<div class="muted" style="padding:16px">No date sheets.</div>`; }
+      : await api('/api/datesheets');
+  }catch(e){ data=[]; }
+  window._dsData=Array.isArray(data)?data:[];
+  renderDateSheets();
+}
+function renderDateSheets(){
+  const el=$('#dsTable'); if(!el) return;
+  const all=(window._dsData||[]);
+  const today=new Date().toISOString().slice(0,10);
+  const rows=all.filter(d=>_dsTab==='upcoming' ? d.date>=today : d.date<today)
+                .sort((a,b)=> _dsTab==='upcoming' ? a.date.localeCompare(b.date) : b.date.localeCompare(a.date));
+  const cnt=$('#dsCount'); if(cnt) cnt.textContent=rows.length+' exam'+(rows.length===1?'':'s');
+  const sub=$('#dsSub');
+  if(sub) sub.textContent = (state.role==='student'||state.role==='parent')
+    ? 'Check your upcoming examination dates' : 'Manage examination schedules per class';
+  const staff=state.role==='admin';
+  if(!rows.length){
+    el.innerHTML='<div class="card empty"><div class="eic">'+icon('calendar-days')+'</div><h4>No '+_dsTab+' exams</h4><p>'+(staff?'Add an exam from the form above.':'The exam schedule will appear here once the school publishes it.')+'</p></div>';
+    return;
+  }
+  el.innerHTML=rows.map(d=>{
+    const dt=new Date(d.date+'T00:00:00');
+    const day=isNaN(dt)?'':dt.getDate();
+    const mon=isNaN(dt)?'':dt.toLocaleDateString('en-IN',{month:'short'});
+    const weekday=isNaN(dt)?'':dt.toLocaleDateString('en-IN',{weekday:'short'});
+    const past=d.date<today;
+    return `<div class="ds-row"${past?' style="opacity:.62"':''}>
+      <div class="ds-date"><b>${day}</b><span>${mon}</span><small>${weekday}</small></div>
+      <div class="db">
+        <b>${esc(d.subject)}</b>
+        <span>${esc(d.exam_type)} • Class ${esc(d.class_name||d.class_id)}</span>
+        <div class="meta" style="margin-top:5px;font-size:11px;color:var(--muted)">${d.time?'<span class="pill n">'+esc(d.time)+'</span>':''}${past?'<span class="pill">Completed</span>':'<span class="pill g">Upcoming</span>'}</div>
+      </div>
+      <div class="row-actions">${staff?`<button type="button" class="danger" onclick="delDS(${d.id})">${icon('trash-2')} Delete</button>`:''}</div>
+    </div>`;
+  }).join('');
+}
 async function addDateSheet(){ if(state.role!=='admin') return toast('Admin only',false); const class_id=$('#dsClass').value, exam_type=$('#dsExam').value, subject=$('#dsSubject').value.trim(), date=$('#dsDate').value, time=$('#dsTime').value; if(!class_id||!subject||!date) return toast('Class, subject, date required',false); try{await api('/api/datesheets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({class_id,exam_type,subject,date,time})}); loadDateSheets(); toast('Added');}catch(e){toast(e.message,false)} }
 async function delDS(id){ if(state.role!=='admin') return toast('Admin only',false); try{await api('/api/datesheets?id='+id,{method:'DELETE'}); loadDateSheets();}catch(e){toast(e.message,false)} }
 
@@ -612,12 +677,93 @@ async function saveMarks(){ if(!['admin','teacher'].includes(state.role)) return
 function showQRFor(id){ if(!['admin','teacher'].includes(state.role) && state.role!=='admin') { /* student can view own QR only */ if(state.role==='student' && state.currentUser?.linked_student_id){ /* allow */ } } navigate('qr'); const el=$('#qrStudentId'); if(el) el.value=id; showQR(); }
 async function showQR(){ const id=$('#qrStudentId').value.trim(); if(!id) return toast('Enter Student ID',false); const disp=$('#qrDisplay'); if(!disp) return; disp.innerHTML=`<img src="${BACKEND_URL}/api/students/${id}/qr" style="width:220px;height:220px;border-radius:12px;border:1px solid #e2e8f0;padding:8px;background:#fff"><p><b>${id}</b></p><p class="muted sm">Scan with camera to mark attendance</p><button class="btn-outline" onclick="window.open('${BACKEND_URL}/api/students/${id}/qr')">Download PNG</button><div class="scan-success" style="margin-top:8px;background:#dcfce7;color:#166534;padding:8px;border-radius:8px">✅ QR Ready — Scan Successful</div>`; }
 
-async function loadNotices(){ let data; try{ data=await api('/api/notices'); }catch(e){ data=[]; } const el=$('#noticeList'); if(!el) return; el.innerHTML=data.length? data.map(n=>`<div class="card" style="border-left:4px solid var(--blue)"><b>${n.title}</b> <small class="muted">${n.date}</small><p>${n.content}</p>${state.role==='admin'?`<button class="btn-red" onclick="delNotice(${n.id})">Delete</button>`:''}</div>`).join('') : `<div class="muted" style="padding:16px">No notices</div>`; }
+async function loadNotices(){
+  const el=$('#noticeList'); if(!el) return;
+  el.innerHTML='<div class="sk-wrap"><div class="sk sk-card"></div><div class="sk sk-card"></div></div>';
+  let data; try{ data=await api('/api/notices'); }catch(e){ data=[]; }
+  const cnt=$('#noticeCount'); if(cnt) cnt.textContent=(data?data.length:0)+' notice'+((data&&data.length)===1?'':'s');
+  el.innerHTML = data.length ? data.map(n=>`<div class="notice-card">
+      <b>${esc(n.title)}</b>
+      <p class="muted">${esc(n.content)}</p>
+      <div class="meta"><span>${icon('calendar')} ${esc(n.date||'')}</span>
+        ${state.role==='admin'?`<span class="row-actions"><button type="button" class="danger" onclick="delNotice(${n.id})">${icon('trash-2')} Delete</button></span>`:''}
+      </div>
+    </div>`).join('')
+    : `<div class="card empty"><div class="eic">${icon('megaphone')}</div><h4>No notices yet</h4><p>School announcements and circulars will appear here.</p></div>`;
+}
 async function addNotice(){ if(state.role!=='admin') return toast('Admin only',false); const t=$('#noticeTitle').value.trim(), c=$('#noticeContent').value.trim(); if(!t) return toast('Title required',false); try{await api('/api/notices',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:t,content:c})}); loadNotices(); toast('Notice posted');}catch(e){toast(e.message,false)} }
 async function delNotice(id){ if(state.role!=='admin') return toast('Admin only',false); try{await api('/api/notices?id='+id,{method:'DELETE'}); loadNotices();}catch(e){toast(e.message,false)} }
 
-async function loadENotes(){ let data; try{ data=await api('/api/enotes'); }catch(e){ data=[]; } const el=$('#enoteList'); if(!el) return; el.innerHTML=data.length? data.map(n=>`<div class="card"><b>${n.title}</b> — <small>${n.subject||''}</small><p>${n.content||''}</p><small class="muted">${n.date}</small> ${['admin','teacher'].includes(state.role)?`<button class="btn-red" onclick="delENote(${n.id})">Delete</button>`:''}</div>`).join('') : `<div class="muted">No notes</div>`; }
-async function addENote(){ if(!['admin','teacher'].includes(state.role)) return toast('Access denied: cannot add notes',false); const t=$('#noteTitle').value.trim(), s=$('#noteSubject').value.trim(), c=$('#noteContent').value.trim(); if(!t) return; try{await api('/api/enotes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:t,subject:s,content:c})}); loadENotes(); toast('Note added');}catch(e){toast(e.message,false)} }
+let _enoteData=[], _enoteSubject='';
+function _isUrl(u){ return /^(https?:)?\/\//i.test(String(u||'').trim()); }
+function escAttr(s){ return String(s??'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function esc(s){ return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+async function loadENotes(){
+  const el=$('#enoteList'); if(!el) return;
+  el.innerHTML='<div class="sk-wrap"><div class="sk sk-row"></div><div class="sk sk-row"></div><div class="sk sk-row"></div></div>';
+  try{ _enoteData=await api('/api/enotes'); }catch(e){ _enoteData=[]; }
+  renderENoteSubjects();
+  filterENotes();
+}
+function renderENoteSubjects(){
+  const box=$('#noteSubjectChips'); if(!box) return;
+  const subs=[...new Set(_enoteData.map(n=>(n.subject||'').trim()).filter(Boolean))];
+  box.innerHTML=['<button type="button" class="chip'+(_enoteSubject===''?' active':'')+'" onclick="setENoteSubject(\'\')">All</button>']
+    .concat(subs.map(s=>`<button type="button" class="chip${_enoteSubject===s?' active':''}" onclick="setENoteSubject('${escAttr(s)}')">${esc(s)}</button>`)).join('');
+}
+function setENoteSubject(s){ _enoteSubject=s; renderENoteSubjects(); filterENotes(); }
+function filterENotes(){
+  const el=$('#enoteList'); if(!el) return;
+  const q=($('#noteQ')?.value||'').toLowerCase().trim();
+  const rows=_enoteData.filter(n=>{
+    const okSub=!_enoteSubject || (n.subject||'').trim()===_enoteSubject;
+    const hay=(n.title+' '+(n.subject||'')+' '+(n.content||'')+' '+(n.teacher_name||'')).toLowerCase();
+    return okSub && (!q || hay.includes(q));
+  });
+  const cnt=$('#enoteCount'); if(cnt) cnt.textContent=rows.length+' note'+(rows.length===1?'':'s');
+  const staff=['admin','teacher'].includes(state.role);
+  if(!rows.length){
+    el.innerHTML='<div class="card empty"><div class="eic">'+icon('book-open')+'</div><h4>'+(q||_enoteSubject?'No matching notes':'No e-notes yet')+'</h4><p>'+(staff?'Upload the first note for your students.':'Teachers have not shared any notes yet. Check back soon.')+'</p></div>';
+    return;
+  }
+  el.innerHTML=rows.map((n,i)=>{
+    const cls=['','green','purple','yellow'][i%4];
+    const url=_isUrl(n.content);
+    const actions=[
+      url?`<button type="button" onclick="openENote(${n.id})">${icon('arrow-right')} Open</button>`:'',
+      url?`<button type="button" onclick="downloadENote(${n.id})">${icon('download')} Download</button>`
+         :`<button type="button" onclick="copyENote(${n.id})">${icon('files')} Copy</button>`,
+      staff?`<button type="button" class="danger" onclick="delENote(${n.id})">${icon('trash-2')} Delete</button>`:''
+    ].join('');
+    return `<div class="note-card">
+      <div class="nf ${cls}">${icon(url?'file-down':'file-text')}</div>
+      <div class="nb">
+        <b>${esc(n.title)}</b>
+        <div class="sub">${esc(n.content||'')}</div>
+        <div class="meta">${n.subject?`<span class="pill n">${esc(n.subject)}</span>`:''}
+          <span>${esc(n.date||'')}</span>
+          ${n.teacher_name?`<span>${esc(n.teacher_name)}</span>`:''}</div>
+      </div>
+      <div class="row-actions">${actions}</div>
+    </div>`;
+  }).join('');
+}
+function _enoteById(id){ return _enoteData.find(n=>n.id===id); }
+function openENote(id){ const n=_enoteById(id); if(!n) return; if(_isUrl(n.content)) window.open(n.content,'_blank','noopener'); else toast('This note has no downloadable link'); }
+function downloadENote(id){
+  const n=_enoteById(id); if(!n||!_isUrl(n.content)) return;
+  const a=document.createElement('a'); a.href=n.content; a.target='_blank'; a.rel='noopener';
+  a.download=(n.title||'e-note').replace(/[^\w\- ]+/g,'').trim().replace(/\s+/g,'-')+'.txt';
+  document.body.appendChild(a); a.click(); a.remove();
+  toast('Download started');
+}
+function copyENote(id){
+  const n=_enoteById(id); if(!n) return;
+  const text=n.title+(n.subject?' ('+n.subject+')':'')+'\n'+(n.content||'');
+  if(navigator.clipboard?.writeText){ navigator.clipboard.writeText(text).then(()=>toast('Note copied')).catch(()=>toast('Copy failed',false)); }
+  else toast('Copying is not supported on this device',false);
+}
+async function addENote(){ if(!['admin','teacher'].includes(state.role)) return toast('Access denied: cannot add notes',false); const t=$('#noteTitle').value.trim(), s=$('#noteSubject').value.trim(), c=$('#noteContent').value.trim(); if(!t) return toast('Title required',false); if(!s) return toast('Subject required',false); if(!c) return toast('Content or link required',false); try{await api('/api/enotes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:t,subject:s,content:c})}); ['#noteTitle','#noteSubject','#noteContent'].forEach(x=>{const e2=$(x); if(e2) e2.value='';}); loadENotes(); toast('Note uploaded');}catch(e){toast(e.message,false)} }
 async function delENote(id){ if(!['admin','teacher'].includes(state.role)) return toast('Access denied',false); try{await api('/api/enotes?id='+id,{method:'DELETE'}); loadENotes();}catch(e){toast(e.message,false)} }
 
 async function loadMeals(){ let data; try{ data=await api('/api/meals'); }catch(e){ data=[]; } const el=$('#mealTable'); if(!el) return; el.innerHTML=data.length? `<table><thead><tr><th>Date</th><th>Class</th><th>Count</th><th>Menu</th><th></th></tr></thead><tbody>`+data.map(m=>`<tr><td>${m.date}</td><td>${m.class_id||''}</td><td>${m.count}</td><td>${m.menu}</td><td>${state.role==='admin'?`<button class="btn-red" onclick="delMeal(${m.id})">Delete</button>`:''}</td></tr>`).join('')+`</tbody></table>` : `<div class="muted" style="padding:16px">No meals</div>`; }
@@ -642,13 +788,16 @@ async function loadSettings(){
   if($('#setColor')) $('#setColor').value=color;
   if(addrEl) addrEl.value=s.address||'';
   if(contEl) contEl.value=s.contact||'';
-  const topSchool=document.querySelector('.school-name');
-  if(topSchool) topSchool.innerHTML=`${name} <span>🇮🇳 Govt. Recognised</span>`;
+  const tsName=$('#topSchoolName');
+  if(tsName) tsName.textContent=name;
   const brandSub=document.querySelector('.brand-sub');
   if(brandSub) brandSub.textContent=name;
   const brandTitle=document.querySelector('.brand-title');
-  if(brandTitle) brandTitle.textContent='Dynamic Attendance';
-  const si=$('#schoolInfo'); if(si) si.innerHTML=`<b>${name}</b> • Govt. Recognised 🇮🇳 • ${s.total_classes||12} Classes`;
+  if(brandTitle) brandTitle.textContent='Dynamic CuroBase';
+  const si=$('#schoolInfo'); if(si) si.innerHTML=`<b>${esc(name)}</b> • Govt. Recognised • ${s.total_classes||12} Classes`;
+  const acctName=$('#setName'); if(acctName) acctName.textContent=(typeof portalAccountName==='function'?portalAccountName():state.currentUser?.username)||'–';
+  const acctRole=$('#setRole'); if(acctRole) acctRole.textContent=state.role||'–';
+  const acctUser=$('#setUsername'); if(acctUser) acctUser.textContent=state.currentUser?.username||'–';
   const sidebarLogo=document.getElementById('sidebarLogo');
   const topbarLogo=document.getElementById('topbarLogo');
   const logoPrev=$('#logoPreview');
@@ -658,14 +807,17 @@ async function loadSettings(){
     if(topbarLogo){ topbarLogo.classList.remove('hidden'); const img=topbarLogo.querySelector('img'); if(img) img.src=url; }
     if(logoPrev) logoPrev.innerHTML=`<img src="${url}"> <div><b>${s.logo_path}</b><br><small class="muted">${name}</small></div>`;
   } else {
-    if(sidebarLogo) sidebarLogo.innerHTML=`🎓`;
+    if(sidebarLogo) sidebarLogo.innerHTML=icon('graduation-cap');
     if(topbarLogo) topbarLogo.classList.add('hidden');
-    if(logoPrev) logoPrev.innerHTML=`<span class="muted">No logo uploaded — shows 🎓</span>`;
+    if(logoPrev) logoPrev.innerHTML=`<span class="muted">No logo uploaded — shows the default mark</span>`;
   }
   let perms; try{ perms=await api('/api/permissions'); }catch(e){ perms=[]; } const pg=$('#permGrid'); if(pg) pg.innerHTML=perms.map(p=>`<label style="display:flex;gap:6px;align-items:center"><input type="checkbox" checked> ${p}</label>`).join(''); let users=[], hist=[]; if(state.role==='admin'){ try{ users=await api('/api/users'); }catch(e){ users=[]; } try{ hist=await api('/api/login_history'); }catch(e){ hist=[]; } } const ut=$('#userTable'); if(ut){ if(state.role!=='admin'){ ut.innerHTML=`<div class="muted">🔒 Admin only</div>`; } else { ut.innerHTML=users.length? `<table><thead><tr><th>User</th><th>Role</th><th></th></tr></thead><tbody>`+users.map(u=>`<tr><td>${u.username}</td><td>${u.role}</td><td><button class="btn-red" onclick="delUser(${u.id})">Delete</button></td></tr>`).join('')+`</tbody></table>` : `No users`; } } const lh=$('#loginHistory'); if(lh){ if(state.role!=='admin'){ lh.innerHTML=`<div class="muted">🔒 Admin only</div>`; } else { lh.innerHTML=hist.length? `<table><thead><tr><th>User</th><th>Time</th><th>OK</th></tr></thead><tbody>`+hist.map(h=>`<tr><td>${h.username}</td><td>${h.time}</td><td>${h.success?'✅':'❌'}</td></tr>`).join('')+`</tbody></table>` : `No history`; } }
-  // hide settings actions for non-admin
-  const saveBtn=document.querySelector('#view-settings .btn-primary');
-  if(saveBtn && state.role!=='admin') saveBtn.style.display='none';
+  // hide mutating settings actions for non-admin (the backend rejects them regardless)
+  document.querySelectorAll('#view-settings .admin-only, #classToolbar, #noticeToolbar').forEach(b=>{
+    b.classList.toggle('hidden', state.role!=='admin');
+  });
+  const dm=$('#setDarkMode'); if(dm) dm.checked = document.documentElement.getAttribute('data-theme')==='dark';
+  const rm=$('#setReduceMotion'); if(rm) rm.checked = document.documentElement.hasAttribute('data-reduce-motion');
 }
 async function saveSettings(){
   if(state.role!=='admin') return toast('Admin only',false);
@@ -674,7 +826,7 @@ async function saveSettings(){
   const address=$('#setAddress')?.value?.trim()||'';
   const contact=$('#setContact')?.value?.trim()||'';
   if(!name) return toast('School name required',false);
-  try{ await api('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({school_name:name, branding_color:color, address, contact})}); toast('Settings saved ✅ '+name); await loadSettings(); const topSchool=document.querySelector('.school-name'); if(topSchool) topSchool.innerHTML=`${name} <span>🇮🇳 Govt. Recognised</span>`; }catch(e){ toast(e.message,false); }
+  try{ await api('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({school_name:name, branding_color:color, address, contact})}); toast('Settings saved ✅ '+name); await loadSettings(); }catch(e){ toast(e.message,false); }
 }
 function previewLogo(input){
   const f=input.files[0];
@@ -772,13 +924,48 @@ async function renderNotifPanel(){
   p.innerHTML=(d.notifications||[]).slice(0,10).map(n=>`<div class="notif-item ${n.read?'':'unread'}"><b>${n.title||n.type}</b><br><small>${n.content||''}</small><br><small class="muted">${n.date||''}</small></div>`).join('')||`<div class="muted">No notifications</div>`;
   p.innerHTML+=`<button class="btn-outline" style="width:100%;margin-top:8px" onclick="navigate('notifications')">View all</button>`;
 }
-async function loadNotifPage(){
-  let d; try{ d=await api('/api/notifications'); }catch(e){ return; }
-  const el=$('#notifList'); if(!el) return;
-  el.innerHTML=(d.notifications||[]).map(n=>`<div class="card notif-item ${n.read?'':'unread'}"><b>${n.type==='alert'?'🔔':n.type==='notice'?'📢':'✅'} ${n.title||''}</b><p>${n.content||''}</p><small class="muted">${n.date||''}</small> ${n.read?'':'<button class="btn-outline" onclick="markRead('+n.id+')">Mark read</button>'}</div>`).join('')||`<div class="muted">No notifications</div>`;
+let _notifFilter='all', _notifData=[];
+function setNotifFilter(f){
+  _notifFilter=f;
+  document.querySelectorAll('#notifTabs button').forEach(b=>b.classList.toggle('active', b.dataset.f===f));
+  renderNotifPage();
 }
-async function markRead(id){ await api('/api/notifications?id='+id,{method:'DELETE'}); loadNotifPage(); loadNotifBadge(); }
-async function markAllRead(){ await api('/api/notifications?id=all',{method:'DELETE'}); loadNotifPage(); loadNotifBadge(); toast('All marked read'); }
+async function loadNotifPage(){
+  const el=$('#notifList'); if(!el) return;
+  el.innerHTML='<div class="sk-wrap"><div class="sk sk-row"></div><div class="sk sk-row"></div><div class="sk sk-row"></div></div>';
+  let d; try{ d=await api('/api/notifications'); }catch(e){ el.innerHTML='<div class="card empty"><div class="eic">'+icon('bell')+'</div><h4>Could not load notifications</h4><p>Check your connection and try again.</p></div>'; return; }
+  _notifData=(d&&d.notifications)||[];
+  renderNotifPage();
+}
+function renderNotifPage(){
+  const el=$('#notifList'); if(!el) return;
+  const rows=_notifData.filter(n=>_notifFilter==='all' || !n.read);
+  const unread=_notifData.filter(n=>!n.read).length;
+  const tabU=document.querySelector('#notifTabs button[data-f="unread"]'); if(tabU) tabU.textContent='Unread ('+unread+')';
+  if(!rows.length){
+    el.innerHTML='<div class="card empty"><div class="eic">'+icon('bell')+'</div><h4>'+( _notifFilter==='unread'?'All caught up':'No notifications yet')+'</h4><p>Attendance alerts, new notices, e-note uploads and exam reminders will appear here.</p></div>';
+    return;
+  }
+  const kindIcon={alert:'circle-alert',notice:'megaphone',enote:'book-open',exam:'calendar-days',info:'info'};
+  const kindTone={alert:'red',notice:'blue',enote:'green',exam:'yellow',info:'blue'};
+  el.innerHTML=rows.map(n=>{
+    const k=(n.type||'info').toLowerCase();
+    return `<div class="list-row ${n.read?'':'unread'}" role="button" tabindex="0"
+        onclick="markRead(${n.id})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();markRead(${n.id})}">
+      <div class="ri ${kindTone[k]||''}">${icon(kindIcon[k]||'bell')}</div>
+      <div class="body"><b>${esc(n.title||n.type||'Notification')}</b><p>${esc(n.content||'')}</p>
+        <div class="sm muted" style="margin-top:3px">${esc(n.date||'')}</div></div>
+      ${n.read?'<span class="chev">'+icon('chevron-right')+'</span>':'<span class="unread-dot" title="Unread"></span>'}
+    </div>`;
+  }).join('');
+}
+async function markRead(id){ try{ await api('/api/notifications?id='+id,{method:'DELETE'}); }catch(e){} loadNotifPage(); loadNotifBadge(); }
+async function markAllRead(){ try{ await api('/api/notifications?id=all',{method:'DELETE'}); }catch(e){ toast('Could not update notifications',false); return; } loadNotifPage(); loadNotifBadge(); toast('All marked read'); }
+async function clearNotifications(){
+  if(!confirm('Clear all notifications?')) return;
+  try{ await api('/api/notifications?id=all',{method:'DELETE'}); }catch(e){ toast('Could not clear notifications',false); return; }
+  _notifData=[]; renderNotifPage(); loadNotifBadge(); toast('Notifications cleared');
+}
 
 // ---- SMART COMMAND CENTER ----
 async function loadCommandCenter(){
@@ -845,8 +1032,8 @@ async function loadHeatmap(){
   const days=data.grid[0]?.days.map(d=>d.date.slice(8))||[];
   el.innerHTML=`<table><thead><tr><th>Class</th>`+days.map(d=>`<th>${d}</th>`).join('')+`</tr></thead><tbody>`+data.grid.map(r=>`<tr><td><b>${r.class}</b></td>`+r.days.map(d=>{
     const bg=d.level==='high'?'#dcfce7':d.level==='medium'?'#fef3c7':d.level==='low'?'#fee2e2':'#f1f5f9';
-    const emoji=d.level==='high'?'🟢':d.level==='medium'?'🟡':d.level==='low'?'🔴':'—';
-    return `<td style="background:${bg};text-align:center" title="${d.date} ${d.percentage}%">${emoji}<br><small>${d.percentage>=0?d.percentage+'%':''}</small></td>`;
+    const dot=d.level==='high'?'<i class="cal-dot P"></i>':d.level==='medium'?'<i class="cal-dot L"></i>':d.level==='low'?'<i class="cal-dot A"></i>':'<span class="muted">—</span>';
+    return `<td style="background:${bg};text-align:center" title="${d.date} ${d.percentage}%">${dot}<br><small>${d.percentage>=0?d.percentage+'%':''}</small></td>`;
   }).join('')+`</tr>`).join('')+`</tbody></table>`;
 }
 // ---- DIGITAL ID ----
@@ -895,22 +1082,7 @@ navigate = function(v){
   // parent switching children it showed the wrong name.
   return _origNavigate(v);
 };
-async function renderMobileHero(){
-  try{
-    const me=await api('/api/auth/me');
-    const s=me.linked_student;
-    if(!s) return;
-    const dash=document.querySelector('#view-dashboard .page-head');
-    if(dash && !document.getElementById('mobileHero')){
-      const div=document.createElement('div');
-      div.id='mobileHero'; div.className='mobile-hero';
-      const hour=new Date().getHours();
-      const greet=hour<12?'Good Morning':hour<17?'Good Afternoon':'Good Evening';
-      div.innerHTML=`${greet}, ${s.name} 👋<br><small>Class ${s.class_name||''}-${s.section_name||''} • ${s.student_id}</small><div style="margin-top:8px;display:flex;gap:8px"><button class="btn-green" onclick="navigate('attendance')">✓ Attendance</button><button class="btn-outline" style="background:#fff" onclick="navigate('studentid')">🪪 My ID</button></div>`;
-      dash.after(div);
-    }
-  }catch(e){}
-}
+async function renderMobileHero(){ /* superseded by the portal hero in portal.js */ }
 async function createTempQR(){
   const payload={class_id:$('#qrTmpClass')?.value||null, section_id:$('#qrTmpSection')?.value||null, subject_id:$('#qrTmpSubject')?.value||null, ttl_minutes:5};
   try{
@@ -1001,6 +1173,7 @@ async function scanQRNative(){
       if(pdR) pdR.textContent=me.user.role+' • Green Valley';
       const dt=$('#dashTeacher'); if(dt) dt.textContent=who;
       filterNavByRole(me.user.role);
+      buildMobileNav();
       loadDashboard(); loadClasses(); loadSettings();
     } else {
       try{ await loadClasses(); }catch(e){}
@@ -1012,5 +1185,321 @@ async function scanQRNative(){
     }
   }catch(e){ try{ await loadClasses(); }catch(e){} }
   // ensure login form Enter works (already via onsubmit)
+  applySavedPrefs();
+  updateOnlineState();
+  window.addEventListener('online', updateOnlineState);
+  window.addEventListener('offline', updateOnlineState);
+  window.addEventListener('resize', ()=>{ clearTimeout(window._rz); window._rz=setTimeout(()=>buildMobileNav(),200); });
 })();
+
+// ============================================================================
+// MOBILE SHELL — role-aware bottom navigation, More sheet, sidebar drawer
+// ============================================================================
+const VIEW_LABELS={
+  dashboard:'Dashboard', students:'Students', teachers:'Teachers', classes:'Classes',
+  attendance:'Attendance', calendar:'Calendar', reports:'Reports', analytics:'Analytics',
+  notices:'Notices', notifications:'Notifications', attcal:'My Attendance', homework:'Homework',
+  exams:'Exam Report', profile:'Profile', password:'Change Password', settings:'Settings',
+  staff:'Staff', parents:'Parents', messages:'Messages', holidays:'Holidays',
+  complaints:'Complaint Box', datesheet:'Date Sheet', timetable:'Timetable', heatmap:'Heatmap',
+  studentid:'Student ID', reviews:'Reviews', qr:'QR Attendance', monthly:'Monthly Report',
+  enotes:'E-Notes', features:'All Features', meals:'Mid-Day Meal', scholarship:'Scholarship'
+};
+const VIEW_ICONS={
+  dashboard:'layout-dashboard', students:'graduation-cap', teachers:'user-check', classes:'building-2',
+  attendance:'clipboard-check', calendar:'calendar', reports:'file-text', analytics:'chart-column',
+  notices:'megaphone', notifications:'bell', attcal:'calendar-days', homework:'notebook-pen',
+  exams:'chart-pie', profile:'user', password:'key-round', settings:'settings', staff:'users',
+  parents:'user-plus', messages:'message-square', holidays:'calendar', complaints:'circle-alert',
+  datesheet:'clipboard-list', timetable:'clock', heatmap:'grid-2x2', studentid:'badge-check',
+  reviews:'star', qr:'qr-code', monthly:'table-2', enotes:'book-open', features:'zap',
+  meals:'clipboard-list', scholarship:'award'
+};
+// Bottom bar per role: Home, <role items>, More  (per design brief)
+const MNAV={
+  admin:  [['dashboard','house','Home'],['students','graduation-cap','Students'],['attendance','clipboard-check','Attendance'],['reports','file-text','Reports']],
+  teacher:[['dashboard','house','Home'],['attendance','clipboard-check','Attendance'],['reports','file-text','Reports'],['messages','message-square','Messages']],
+  student:[['dashboard','house','Home'],['attcal','calendar-days','Attendance'],['enotes','book-open','E-Notes'],['notices','megaphone','Notices']],
+  parent: [['dashboard','house','Home'],['attcal','calendar-days','Attendance'],['notices','megaphone','Notices'],['enotes','book-open','E-Notes']]
+};
+// Everything less-used lives in the More sheet
+const MORE_ITEMS={
+  admin:['teachers','classes','analytics','notices','notifications','qr','monthly','attcal','homework','exams','calendar','timetable','staff','parents','messages','holidays','complaints','datesheet','heatmap','studentid','reviews','enotes','features','settings','password','profile'],
+  teacher:['students','classes','notices','notifications','qr','monthly','attcal','homework','exams','calendar','timetable','holidays','complaints','datesheet','studentid','reviews','enotes','features','password','profile'],
+  student:['reports','homework','exams','datesheet','notifications','calendar','timetable','complaints','reviews','holidays','studentid','features','password','profile'],
+  parent:['reports','homework','exams','datesheet','notifications','calendar','complaints','holidays','studentid','features','password','profile']
+};
+function buildMobileNav(){
+  const nav=document.getElementById('mobileNav'); if(!nav) return;
+  const role=state.role||'teacher';
+  const items=(MNAV[role]||MNAV.teacher).filter(([v])=>canView(role,v));
+  nav.innerHTML=items.map(([v,ic,label])=>
+    `<button data-mview="${v}" type="button" onclick="navigate('${v}')">${icon(ic)}<span>${label}</span></button>`
+  ).join('')+`<button data-more type="button" onclick="openMoreSheet()">${icon('ellipsis')}<span>More</span></button>`;
+  syncMobileNav(window._currentView||'dashboard');
+}
+function syncMobileNav(v){
+  window._currentView=v;
+  const nav=document.getElementById('mobileNav'); if(!nav) return;
+  nav.querySelectorAll('button').forEach(b=>{
+    b.classList.toggle('active', b.dataset.mview===v);
+  });
+  // "More" lights up when the active view lives in the sheet
+  const more=nav.querySelector('button[data-more]');
+  if(more) more.classList.toggle('active', !!nav.querySelector(`button[data-mview="${v}"]`)===false);
+}
+function openMoreSheet(){
+  const role=state.role||'teacher';
+  const grid=document.getElementById('moreSheetGrid'); if(!grid) return;
+  const primary=new Set((MNAV[role]||MNAV.teacher).map(x=>x[0]));
+  const items=(MORE_ITEMS[role]||MORE_ITEMS.teacher)
+    .filter(v=>canView(role,v) && !primary.has(v) && document.getElementById('view-'+v));
+  grid.innerHTML=items.map(v=>`<button class="sheet-item" type="button" onclick="closeMoreSheet();navigate('${v}')">${icon(VIEW_ICONS[v]||'circle-help')}<span>${VIEW_LABELS[v]||v}</span></button>`).join('');
+  document.getElementById('moreSheet')?.classList.add('open');
+  paintIcons(grid);
+}
+function closeMoreSheet(){ document.getElementById('moreSheet')?.classList.remove('open'); }
+function closeSidebar(){
+  const sb=document.getElementById('sidebar');
+  if(sb) sb.classList.remove('open');
+  document.getElementById('sidebarScrim')?.classList.remove('show');
+}
+// The drawer button toggles; the scrim only exists on mobile
+(function wireSidebar(){
+  const btn=document.getElementById('menuBtn');
+  if(btn) btn.onclick=()=>{
+    const sb=document.getElementById('sidebar'); if(!sb) return;
+    const open=sb.classList.toggle('open');
+    document.getElementById('sidebarScrim')?.classList.toggle('show', open);
+  };
+  // desktop: collapse the rail instead of overlaying it
+  document.addEventListener('click',(e)=>{
+    if(innerWidth<901) return;
+    const head=e.target.closest?.('.sidebar-head');
+    if(head) document.getElementById('sidebar')?.classList.toggle('collapsed');
+  });
+  document.addEventListener('keydown',(e)=>{
+    if(e.key==='Escape'){ closeMoreSheet(); closeSidebar(); document.getElementById('profileDrop')?.classList.add('hidden'); }
+  });
+})();
+
+// ============================================================================
+// PREFERENCES — theme, reduced motion, saved login, online indicator
+// ============================================================================
+function applySavedPrefs(){
+  try{
+    const theme=localStorage.getItem('curoTheme');
+    if(theme) setTheme(theme,true);
+    if(localStorage.getItem('curoReduceMotion')==='1') setReduceMotion(true,true);
+    if(localStorage.getItem('curoSavedLogin')==='0') setSavedLogin(false,true);
+  }catch(e){}
+}
+function setTheme(t,silent){
+  document.documentElement.setAttribute('data-theme',t);
+  const m=document.querySelector('meta[name="theme-color"]'); if(m) m.setAttribute('content', t==='dark'?'#0b1220':'#2563eb');
+  const cb=$('#setDarkMode'); if(cb) cb.checked = t==='dark';
+  try{ if(!silent) localStorage.setItem('curoTheme',t); }catch(e){}
+}
+function setReduceMotion(on,silent){
+  document.documentElement.toggleAttribute('data-reduce-motion', !!on);
+  const cb=$('#setReduceMotion'); if(cb) cb.checked=!!on;
+  try{ if(!silent) localStorage.setItem('curoReduceMotion', on?'1':'0'); }catch(e){}
+}
+function setSavedLogin(on,silent){
+  const cb=$('#setSavedLogin'); if(cb) cb.checked=!!on;
+  if(!on){ try{ localStorage.removeItem('rememberUser'); }catch(e){} }
+  try{ if(!silent) localStorage.setItem('curoSavedLogin', on?'1':'0'); }catch(e){}
+}
+function updateOnlineState(){
+  document.body.classList.toggle('is-offline', !navigator.onLine);
+  if(!navigator.onLine) toast('You are offline — changes will queue');
+}
+
+// ============================================================================
+// ATTENDANCE REPORTS (Screen 4) — real server-computed figures
+// ============================================================================
+let _repRange='daily';
+function initReports(){
+  const d=$('#repDate'); if(d && !d.value) d.value=new Date().toISOString().slice(0,10);
+  const m=$('#repMonth'); if(m && !m.value) m.value=new Date().toISOString().slice(0,7);
+  setReportRange(_repRange,true);
+  loadReports();
+}
+function setReportRange(r,silent){
+  _repRange=r;
+  document.querySelectorAll('#repRange button').forEach(b=>b.classList.toggle('active', b.dataset.range===r));
+  const dw=$('#repDateWrap'), mo=$('#repMonth');
+  if(dw) dw.classList.toggle('hidden', r!=='daily');
+  if(mo) mo.classList.toggle('hidden', r!=='monthly');
+  const t=$('#repChartTitle'); if(t) t.textContent = r==='daily'?'Daily Trend': r==='weekly'?'Weekly Trend (last 7 days)':'Monthly Trend (last 6 months)';
+  if(!silent) loadReports();
+}
+function reportNav(dir){
+  const d=$('#repDate'); if(!d||!d.value) return;
+  const dt=new Date(d.value+'T00:00:00'); dt.setDate(dt.getDate()+dir);
+  d.value=dt.toISOString().slice(0,10); loadReports();
+}
+function exportReport(fmt){
+  // Reports reuses the monthly export endpoint so the file matches the on-screen maths
+  const month=$('#repMonth')?.value || new Date().toISOString().slice(0,7);
+  const cid=$('#repAClass')?.value||'', sid=$('#repASection')?.value||'';
+  window.open(`/api/export/monthly/${fmt}?month=${month}&class_id=${cid}&section_id=${sid}`,'_blank');
+  toast('Opening '+fmt.toUpperCase()+' export…');
+}
+function _repSkeleton(){
+  ['#repStats','#repClassBars','#repLow','#repHistory','#repCalGrid'].forEach(id=>{
+    const el=document.querySelector(id); if(el) el.innerHTML='<div class="sk sk-line"></div><div class="sk sk-line w80"></div><div class="sk sk-line w60"></div>';
+  });
+}
+async function loadReports(){
+  const stats=$('#repStats'); if(!stats) return;
+  _repSkeleton();
+  const cid=$('#repAClass')?.value||'', sid=$('#repASection')?.value||'';
+  const qs=`class_id=${cid}&section_id=${sid}`;
+  try{
+    const day=$('#repDate')?.value || new Date().toISOString().slice(0,10);
+    const month=$('#repMonth')?.value || day.slice(0,7);
+    const [dash,ana,cal,mon]=await Promise.all([
+      api(`/api/attendance/dashboard?date=${day}&${qs}`),
+      api(`/api/analytics?${qs}`),
+      api(`/api/calendar?month=${month}&${qs}`).catch(()=>null),
+      api(`/api/monthly?month=${month}&${qs}`).catch(()=>null)
+    ]);
+    // 1. stat tiles
+    const tiles=[
+      ['blue','users','Total',dash.total],
+      ['green','circle-check','Present',dash.present],
+      ['red','circle-x','Absent',dash.absent],
+      ['yellow','clock','Late',dash.late],
+      ['yellow','user','Leave',dash.leave],
+      ['red','circle-alert','Not Marked',dash.not_marked]
+    ];
+    stats.innerHTML=tiles.map(([c,ic,label,val])=>
+      `<div class="stat-card ${c}"><div class="stat-icon">${icon(ic)}</div><div><small>${label}</small><b>${val??0}</b></div></div>`).join('');
+    // 2. donut + legend
+    const pct=dash.percentage||0;
+    const donut=$('#repDonut');
+    if(donut){ donut.style.setProperty('--p', pct); const sp=donut.querySelector('span'); if(sp) sp.innerHTML=pct+'%<small>Attendance</small>'; }
+    const pill=$('#repRatePill');
+    if(pill){ pill.className='pill '+(pct>=90?'g':pct>=75?'y':'r'); pill.textContent=pct+'% on '+dash.date; }
+    const leg=$('#repLegend');
+    if(leg) leg.innerHTML=[
+      ['g','Present',dash.present],['r','Absent',dash.absent],['y','Late',dash.late],
+      ['l','Leave',dash.leave],['n','Not marked',dash.not_marked]
+    ].map(([c,l,v])=>`<li><span class="dot ${c}"></span> ${l} <b>${v??0}</b></li>`).join('');
+    // 3. trend chart
+    const series=_repRange==='weekly'?ana.weekly:_repRange==='monthly'?ana.monthly:ana.weekly;
+    const chart=$('#repChart');
+    if(chart){
+      chart.innerHTML = series.length ? series.map(x=>{
+        const label=_repRange==='monthly'?x.month:x.date, pctv=x.percentage||0;
+        return `<div style="height:${Math.max(4,pctv)}%" title="${label} — ${pctv}%"><span>${pctv}%</span></div>`;
+      }).join('') : '<div class="inline-empty">No data for this range yet.</div>';
+    }
+    // 4. class-wise bars
+    const bars=$('#repClassBars');
+    if(bars){
+      const comp=ana.class_comparison||[];
+      bars.innerHTML = comp.length ? comp.map(c=>{
+        const denom=Math.max(1, c.total*ana.working_days||1);
+        const p=Math.min(100, Math.round((c.present_records/denom)*100));
+        const tone=p>=90?'g':p>=75?'y':'r';
+        return `<div class="bar-row"><span class="bar-label">Class ${esc(c.class)}</span>
+          <div class="bar-track"><div class="bar-fill ${tone}" style="width:${p}%"></div></div>
+          <span class="pct">${p}%</span></div>`;
+      }).join('') : '<div class="inline-empty">No classes yet.</div>';
+    }
+    // 5. low attendance alerts
+    const low=$('#repLow');
+    if(low){
+      const rows=ana.low_attendance||[];
+      low.innerHTML = rows.length ? `<table><thead><tr><th>Student</th><th>%</th><th></th></tr></thead><tbody>`+
+        rows.map(s=>`<tr><td>${esc(s.name)}<br><small class="muted">${esc(s.student_id)}</small></td>
+          <td><span class="badge A">${s.percentage}%</span></td>
+          <td><span class="pill warn">Low</span></td></tr>`).join('')+`</tbody></table>`
+        : '<div class="inline-empty">No students below 75% this month 🎉</div>';
+    }
+    // 6. student-wise history — full roster with the server's own monthly maths
+    const hist=$('#repHistory');
+    if(hist){
+      const rows=(mon&&mon.students)||[];
+      const wd=(mon&&mon.working_days)||ana.working_days||0;
+      hist.innerHTML = rows.length ? `<table><thead><tr><th>Student</th><th>ID</th><th>Present</th><th>Absent</th><th>%</th><th>Status</th></tr></thead><tbody>`+
+        rows.map(s=>`<tr><td><b>${esc(s.student.name)}</b><br><small class="muted">Roll ${esc(s.student.roll_no||'—')}</small></td>
+          <td class="muted">${esc(s.student.student_id)}</td>
+          <td><span class="badge P">${s.present}</span></td>
+          <td><span class="badge A">${s.absent}</span></td>
+          <td><span class="badge ${s.pct>=90?'P':s.pct>=75?'L':'A'}">${s.pct}%</span></td>
+          <td>${s.pct<75?'<span class="pill r">Needs attention</span>':s.pct>=90?'<span class="pill g">Excellent</span>':'<span class="pill y">On track</span>'}</td></tr>`).join('')+`</tbody></table>`
+        : '<div class="inline-empty">No students found for this class yet.</div>';
+      if(hist.firstChild && wd) hist.dataset.days=wd;
+    }
+    // 7. calendar
+    const grid=$('#repCalGrid');
+    if(grid){
+      if(!cal || !cal.days){ grid.innerHTML='<div class="inline-empty">No calendar data.</div>'; }
+      else{
+        const first=new Date(cal.days[0].date+'T00:00:00');
+        const lead=(first.getDay()+6)%7; // Monday-first
+        let html='';
+        for(let i=0;i<lead;i++) html+='<div></div>';
+        html+=cal.days.map(d=>{
+          const cls=['cal-day'];
+          if(d.is_holiday) cls.push('holiday');
+          if(d.date===new Date().toISOString().slice(0,10)) cls.push('today');
+          const dots=['P','A','L','T'].filter(k=>d[{P:'present',A:'absent',L:'leave',T:'late'}[k]]>0)
+            .map(k=>`<i class="cal-dot ${k}"></i>`).join('');
+          return `<div class="${cls.join(' ')}" title="${d.date} — ${d.percentage}%">
+            <b>${d.date.slice(8)}</b>
+            <div class="cal-cell">${d.is_holiday?'Holiday':(d.total?d.percentage+'%':'—')}</div>
+            <div>${dots}</div></div>`;
+        }).join('');
+        grid.innerHTML=html;
+      }
+    }
+  }catch(e){
+    stats.innerHTML=`<div class="card error-state" style="grid-column:1/-1">${icon('circle-alert')}<div><b>Could not load reports</b><br><span class="sm">${esc(e.message||e)}</span></div></div>`;
+  }
+}
+
+// ============================================================================
+// DASHBOARD extras — recent activity + command centre toggle
+// ============================================================================
+async function loadRecentActivity(){
+  const el=document.getElementById('recentActivity'); if(!el) return;
+  const date=$('#dashDate')?.value || new Date().toISOString().slice(0,10);
+  let ana; try{ ana=await api('/api/analytics'); }catch(e){ ana=null; }
+  if(!ana || !(ana.class_comparison||[]).length){
+    el.innerHTML='<div class="inline-empty">No attendance recorded yet today.</div>'; return;
+  }
+  const wd=ana.working_days||1;
+  el.innerHTML=ana.class_comparison.slice(0,6).map(c=>{
+    const p=Math.min(100, Math.round(c.present_records/Math.max(1,c.total*wd)*100));
+    const tone=p>=90?'green':p>=75?'yellow':'red';
+    const label=p>=90?'Good':p>=75?'Average':'Low';
+    return `<div class="list-row" style="cursor:default">
+      <div class="ri ${tone}">${icon('clipboard-check')}</div>
+      <div class="body"><b>Class ${esc(c.class)}</b><p>${c.total} students on roll</p></div>
+      <div style="text-align:right"><span class="badge ${p>=90?'P':p>=75?'L':'A'}">${p}%</span>
+        <div class="sm muted" style="margin-top:3px">${label}</div></div>
+    </div>`;
+  }).join('');
+  const d=new Date(date+'T00:00:00');
+  const dt=document.getElementById('dashDate');
+  if(dt && !isNaN(d)) dt.title='Showing '+d.toLocaleDateString('en-IN',{weekday:'long',day:'2-digit',month:'long',year:'numeric'});
+}
+function toggleCommandCenter(){
+  const cb=document.getElementById('dashHideCC'), card=document.getElementById('ccCard');
+  if(!cb||!card) return;
+  card.classList.toggle('hidden', cb.checked);
+  try{ localStorage.setItem('curoHideCC', cb.checked?'1':'0'); }catch(e){}
+}
+// restore the command-centre preference as soon as the shell exists
+(function initCC(){
+  try{
+    const cb=document.getElementById('dashHideCC'), card=document.getElementById('ccCard');
+    if(cb && card && localStorage.getItem('curoHideCC')==='1'){ cb.checked=true; card.classList.add('hidden'); }
+  }catch(e){}
+})();
+
 

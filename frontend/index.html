@@ -3,12 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Dynamic Attendance App — Smart School Management</title>
+<title>Dynamic CuroBase — Smart School Attendance Management System</title>
+<meta name="description" content="Dynamic CuroBase — smart school attendance management for Admin, Teacher, Student and Parent with role-based access, QR attendance, reports and e-notes.">
 <link rel="manifest" href="/manifest.json">
-<meta name="theme-color" content="#0f1f3c">
+<meta name="theme-color" content="#2563eb">
 <meta name="backend-url" content="">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Attendance">
+<meta name="apple-mobile-web-app-title" content="Dynamic CuroBase">
 <link rel="apple-touch-icon" href="/icon-192.png">
 <link rel="icon" type="image/png" href="/icon-192.png">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Poppins:wght@600;700&display=swap" rel="stylesheet">
@@ -19,105 +20,144 @@
 <!-- LOGIN SCREEN -->
 <div id="loginScreen" class="login-screen">
   <div class="login-left">
-    <div class="login-flag">🇮🇳 Government School Initiative</div>
+    <div class="login-flag"><i data-icon="map-pin"></i> Government School Initiative</div>
     <div class="login-illust">
-      <div class="school-icon">🎓</div>
-      <div class="school-building">🏫</div>
-      <div class="floating-icons"><span>📚</span><span>✏️</span><span>🎒</span><span>🏆</span></div>
+      <div class="school-icon" id="loginBrandIcon"><i data-icon="graduation-cap"></i></div>
+      <div class="floating-icons">
+        <span><i data-icon="book-open"></i></span>
+        <span><i data-icon="clipboard-check"></i></span>
+        <span><i data-icon="calendar-days"></i></span>
+        <span><i data-icon="award"></i></span>
+      </div>
     </div>
-    <h1>Dynamic Attendance App</h1>
-    <p class="sub">Smart School Management System</p>
-    <p class="tagline">Better Attendance, Brighter Future ✨</p>
+    <h1>Dynamic CuroBase</h1>
+    <p class="sub">Smart School Attendance Management System</p>
+    <p class="tagline">Smarter Attendance · Better Learning · Brighter Future</p>
     <ul class="login-features">
-      <li>✅ Daily Attendance with QR & Manual</li>
-      <li>📊 Monthly Reports — Excel & PDF</li>
-      <li>🏫 Classes 1–12 with Sections</li>
-      <li>🇮🇳 Govt. School Ready</li>
+      <li><i data-icon="clipboard-check"></i> Daily attendance with QR &amp; manual marking</li>
+      <li><i data-icon="file-spreadsheet"></i> Monthly reports — Excel &amp; PDF export</li>
+      <li><i data-icon="layout-dashboard"></i> Separate dashboards for Admin, Teacher, Student &amp; Parent</li>
+      <li><i data-icon="shield-check"></i> Role-based access enforced on the server</li>
     </ul>
   </div>
   <div class="login-right">
     <form id="loginForm" class="login-card" onsubmit="doLogin(event)">
-      <h2>Welcome Back! 👋</h2>
-      <p class="muted">Login to your account</p>
+      <div class="login-tabs" role="tablist" aria-label="Choose account type">
+        <button type="button" class="active" onclick="showLoginCard('staff')" aria-selected="true"><i data-icon="shield-check"></i>Staff</button>
+        <button type="button" onclick="showLoginCard('student')" aria-selected="false"><i data-icon="graduation-cap"></i>Student</button>
+        <button type="button" onclick="showLoginCard('parent')" aria-selected="false"><i data-icon="users"></i>Parent</button>
+      </div>
+      <div class="login-role-icon" aria-hidden="true"><i data-icon="shield-check"></i></div>
+      <h2>Welcome Back!</h2>
+      <p class="login-sub">Sign in to your staff account</p>
       <div id="loginSchoolInfo" class="login-school-info">
-        <img id="loginLogo" src="" alt="" class="hidden" style="height:48px;border-radius:8px;margin-bottom:8px">
-        <div id="loginSchoolName" style="font-weight:700;color:var(--navy)">Dynamic Attendance App</div>
-        <small class="muted">Smart School Management System</small>
+        <img id="loginLogo" src="" alt="" class="hidden">
+        <b id="loginSchoolName">School Name</b>
+        <span>Smart School Attendance Management System</span>
       </div>
-      <label>Role <small class="muted">(for reference, auth uses account role)</small></label>
-      <select id="loginRole"><option value="admin">Admin</option><option value="teacher">Teacher</option><option value="student">Student</option><option value="parent">Parent</option></select>
-      <label>Username *</label>
-      <input id="loginUser" placeholder="e.g. admin" value="admin" required autocomplete="username">
-      <label>Password *</label>
-      <div class="pwd-wrap"><input id="loginPass" type="password" placeholder="••••••••" value="admin123" required autocomplete="current-password"><button type="button" onclick="togglePwd()" tabindex="-1">👁️</button></div>
+      <div class="field">
+        <label>Role <small class="muted">(for reference, auth uses account role)</small></label>
+        <select id="loginRole"><option value="admin">Admin</option><option value="teacher">Teacher</option><option value="student">Student</option><option value="parent">Parent</option></select>
+      </div>
+      <div class="field">
+        <label for="loginUser">Username *</label>
+        <div class="input-wrap">
+          <span class="lead"><i data-icon="user"></i></span>
+          <input id="loginUser" placeholder="e.g. admin" value="admin" required autocomplete="username">
+        </div>
+      </div>
+      <div class="field">
+        <label for="loginPass">Password *</label>
+        <div class="pwd-wrap"><input id="loginPass" type="password" placeholder="••••••••" value="admin123" required autocomplete="current-password"><button type="button" onclick="togglePwd()" tabindex="-1" aria-label="Show or hide password"><i data-icon="eye"></i></button></div>
+      </div>
       <div class="login-row"><label class="check"><input type="checkbox" id="rememberMe" checked> Remember Me</label><a href="#" onclick="toast('Contact Admin for reset');return false">Forgot Password?</a></div>
-      <button id="loginBtn" type="submit" class="btn-primary btn-block">Login →</button>
+      <button id="loginBtn" type="submit" class="btn-primary btn-block">Login <i data-icon="arrow-right"></i></button>
       <p class="login-hint">Demo: <b>admin/admin123</b> | <b>teacher/teacher123</b></p>
-      <p id="loginMsg" class="warn"></p>
+      <p id="loginMsg" class="login-msg" role="alert"></p>
       <div class="login-alt-links">
-        <a href="#" onclick="showLoginCard('student');return false;">🎓 Student Login</a>
-        <a href="#" onclick="showLoginCard('parent');return false;">👨‍👩‍👧 Parent Login</a>
+        <a href="#" onclick="showLoginCard('student');return false;"><i data-icon="graduation-cap"></i> Student Login</a>
+        <a href="#" onclick="showLoginCard('parent');return false;"><i data-icon="users"></i> Parent Login</a>
       </div>
-      <p class="muted sm">Not a member? <a href="#">Contact Admin</a></p>
+      <p class="muted sm">Not a member? <a href="#" onclick="toast('Contact Admin for reset');return false">Contact Admin</a></p>
     </form>
 
     <!-- STUDENT LOGIN -->
     <form id="studentLoginForm" class="login-card hidden" onsubmit="doStudentLogin(event)" novalidate>
-      <div class="login-role-icon" aria-hidden="true">🎓</div>
-      <h2>Student Login</h2>
-      <p class="muted">Sign in with your Student ID</p>
-      <div id="studentLoginSchoolInfo" class="login-school-info">
-        <div id="studentLoginSchoolName" style="font-weight:700;color:var(--navy)"></div>
+      <div class="login-tabs" role="tablist" aria-label="Choose account type">
+        <button type="button" onclick="showLoginCard('staff')" aria-selected="false"><i data-icon="shield-check"></i>Staff</button>
+        <button type="button" class="active" onclick="showLoginCard('student')" aria-selected="true"><i data-icon="graduation-cap"></i>Student</button>
+        <button type="button" onclick="showLoginCard('parent')" aria-selected="false"><i data-icon="users"></i>Parent</button>
       </div>
-      <label for="stIdent">Student ID / Admission Number *</label>
-      <input id="stIdent" placeholder="e.g. STU001" required autocomplete="username"
-             aria-describedby="stLoginMsg">
-      <label for="stPass">Password *</label>
-      <div class="pwd-wrap">
-        <input id="stPass" type="password" placeholder="••••••••" required autocomplete="current-password"
-               aria-describedby="stLoginMsg">
-        <button type="button" onclick="toggleStPwd()" aria-label="Show or hide password" tabindex="-1">👁️</button>
+      <div class="login-role-icon" aria-hidden="true"><i data-icon="graduation-cap"></i></div>
+      <h2>Student Login</h2>
+      <p class="login-sub">Sign in with your Student ID</p>
+      <div id="studentLoginSchoolInfo" class="login-school-info">
+        <div id="studentLoginSchoolName"></div>
+      </div>
+      <div class="field">
+        <label for="stIdent">Student ID / Admission Number *</label>
+        <div class="input-wrap">
+          <span class="lead"><i data-icon="badge-check"></i></span>
+          <input id="stIdent" placeholder="e.g. STU001" required autocomplete="username" aria-describedby="stLoginMsg">
+        </div>
+      </div>
+      <div class="field">
+        <label for="stPass">Password *</label>
+        <div class="pwd-wrap">
+          <input id="stPass" type="password" placeholder="••••••••" required autocomplete="current-password" aria-describedby="stLoginMsg">
+          <button type="button" onclick="toggleStPwd()" aria-label="Show or hide password" tabindex="-1"><i data-icon="eye"></i></button>
+        </div>
       </div>
       <div class="login-row">
         <label class="check"><input type="checkbox" id="stRemember"> Remember Me</label>
         <a href="#" onclick="forgotPassword('student');return false;">Forgot Password?</a>
       </div>
-      <button id="stLoginBtn" type="submit" class="btn-primary btn-block">Login →</button>
+      <button id="stLoginBtn" type="submit" class="btn-primary btn-block">Login <i data-icon="arrow-right"></i></button>
       <p class="login-hint">Demo: <b>STU001 / student123</b> <span class="muted">(or ADM-2010-0001)</span></p>
-      <p id="stLoginMsg" class="warn" role="alert"></p>
+      <p id="stLoginMsg" class="login-msg" role="alert"></p>
       <div class="login-alt-links">
-        <a href="#" onclick="showLoginCard('parent');return false;">👨‍👩‍👧 Parent Login</a>
-        <a href="#" onclick="showLoginCard('staff');return false;">🏫 Staff Login</a>
+        <a href="#" onclick="showLoginCard('parent');return false;"><i data-icon="users"></i> Parent Login</a>
+        <a href="#" onclick="showLoginCard('staff');return false;"><i data-icon="shield-check"></i> Staff Login</a>
       </div>
     </form>
 
     <!-- PARENT LOGIN -->
     <form id="parentLoginForm" class="login-card hidden" onsubmit="doParentLogin(event)" novalidate>
-      <div class="login-role-icon parent" aria-hidden="true">👨‍👩‍👧</div>
-      <h2>Parent Login</h2>
-      <p class="muted">Sign in to track your child's progress</p>
-      <div id="parentLoginSchoolInfo" class="login-school-info">
-        <div id="parentLoginSchoolName" style="font-weight:700;color:var(--navy)"></div>
+      <div class="login-tabs" role="tablist" aria-label="Choose account type">
+        <button type="button" onclick="showLoginCard('staff')" aria-selected="false"><i data-icon="shield-check"></i>Staff</button>
+        <button type="button" onclick="showLoginCard('student')" aria-selected="false"><i data-icon="graduation-cap"></i>Student</button>
+        <button type="button" class="active" onclick="showLoginCard('parent')" aria-selected="true"><i data-icon="users"></i>Parent</button>
       </div>
-      <label for="parIdent">Parent ID / Registered Mobile *</label>
-      <input id="parIdent" placeholder="e.g. PAR-5012" required autocomplete="username"
-             aria-describedby="parLoginMsg">
-      <label for="parPass">Password / PIN *</label>
-      <div class="pwd-wrap">
-        <input id="parPass" type="password" placeholder="••••••••" required autocomplete="current-password"
-               aria-describedby="parLoginMsg">
-        <button type="button" onclick="toggleParPwd()" aria-label="Show or hide password" tabindex="-1">👁️</button>
+      <div class="login-role-icon parent" aria-hidden="true"><i data-icon="users"></i></div>
+      <h2>Parent Login</h2>
+      <p class="login-sub">Sign in to track your child's progress</p>
+      <div id="parentLoginSchoolInfo" class="login-school-info">
+        <div id="parentLoginSchoolName"></div>
+      </div>
+      <div class="field">
+        <label for="parIdent">Parent ID / Registered Mobile *</label>
+        <div class="input-wrap">
+          <span class="lead"><i data-icon="user-check"></i></span>
+          <input id="parIdent" placeholder="e.g. PAR-5012" required autocomplete="username" aria-describedby="parLoginMsg">
+        </div>
+      </div>
+      <div class="field">
+        <label for="parPass">Password / PIN *</label>
+        <div class="pwd-wrap">
+          <input id="parPass" type="password" placeholder="••••••••" required autocomplete="current-password" aria-describedby="parLoginMsg">
+          <button type="button" onclick="toggleParPwd()" aria-label="Show or hide password" tabindex="-1"><i data-icon="eye"></i></button>
+        </div>
       </div>
       <div class="login-row">
         <label class="check"><input type="checkbox" id="parRemember"> Remember Me</label>
         <a href="#" onclick="forgotPassword('parent');return false;">Forgot Password?</a>
       </div>
-      <button id="parLoginBtn" type="submit" class="btn-primary btn-block">Login →</button>
+      <button id="parLoginBtn" type="submit" class="btn-primary btn-block">Login <i data-icon="arrow-right"></i></button>
       <p class="login-hint">Demo: <b>PAR-5012 / parent123</b> <span class="muted">(or 9876543210)</span></p>
-      <p id="parLoginMsg" class="warn" role="alert"></p>
+      <p id="parLoginMsg" class="login-msg" role="alert"></p>
       <div class="login-alt-links">
-        <a href="#" onclick="showLoginCard('student');return false;">🎓 Student Login</a>
-        <a href="#" onclick="showLoginCard('staff');return false;">🏫 Staff Login</a>
+        <a href="#" onclick="showLoginCard('student');return false;"><i data-icon="graduation-cap"></i> Student Login</a>
+        <a href="#" onclick="showLoginCard('staff');return false;"><i data-icon="shield-check"></i> Staff Login</a>
       </div>
     </form>
   </div>
@@ -128,78 +168,88 @@
   <!-- SIDEBAR -->
   <aside id="sidebar">
     <div class="sidebar-head">
-      <div class="logo-box" id="sidebarLogo">🎓</div>
+      <div class="logo-box" id="sidebarLogo"><i data-icon="graduation-cap"></i></div>
       <div>
-        <div class="brand-title">Dynamic Attendance</div>
-        <div class="brand-sub">Smart School System</div>
+        <div class="brand-title">Dynamic CuroBase</div>
+        <div class="brand-sub">Smart School Attendance</div>
       </div>
-      <span class="flag-mini">🇮🇳</span>
+      <span class="flag-mini"><i data-icon="shield-check"></i></span>
     </div>
-    <nav id="nav">
-      <button data-view="dashboard" class="active"><span class="ico">📊</span> Dashboard</button>
-      <button data-view="students"><span class="ico">👥</span> Students</button>
-      <button data-view="teachers"><span class="ico">🎓</span> Teachers</button>
-      <button data-view="classes"><span class="ico">🏫</span> Classes</button>
-      <button data-view="attendance"><span class="ico">📋</span> Attendance</button>
-      <button data-view="calendar"><span class="ico">📅</span> Calendar</button>
-      <button data-view="reports"><span class="ico">📄</span> Reports</button>
-      <button data-view="analytics"><span class="ico">📊</span> Analytics</button>
-      <button data-view="notices"><span class="ico">📢</span> Notices</button>
-      <button data-view="notifications"><span class="ico">🔔</span> Notifications</button>
-      <button data-view="attcal"><span class="ico">📅</span> My Attendance</button>
-      <button data-view="homework"><span class="ico">📝</span> Homework</button>
-      <button data-view="exams"><span class="ico">📊</span> Exam Report</button>
-      <button data-view="profile"><span class="ico">👤</span> Profile</button>
-      <button data-view="password"><span class="ico">🔑</span> Change Password</button>
-      <button data-view="settings"><span class="ico">⚙️</span> Settings</button>
+    <nav id="nav" aria-label="Main navigation">
+      <button data-view="dashboard" class="active" type="button"><i data-icon="layout-dashboard"></i><span>Dashboard</span></button>
+      <button data-view="students" type="button"><i data-icon="graduation-cap"></i><span>Students</span></button>
+      <button data-view="teachers" type="button"><i data-icon="user-check"></i><span>Teachers</span></button>
+      <button data-view="classes" type="button"><i data-icon="building-2"></i><span>Classes</span></button>
+      <button data-view="attendance" type="button"><i data-icon="clipboard-check"></i><span>Attendance</span></button>
+      <button data-view="calendar" type="button"><i data-icon="calendar"></i><span>Calendar</span></button>
+      <button data-view="reports" type="button"><i data-icon="file-text"></i><span>Reports</span></button>
+      <button data-view="analytics" type="button"><i data-icon="chart-column"></i><span>Analytics</span></button>
+      <button data-view="notices" type="button"><i data-icon="megaphone"></i><span>Notices</span></button>
+      <button data-view="notifications" type="button"><i data-icon="bell"></i><span>Notifications</span></button>
+      <button data-view="attcal" type="button"><i data-icon="calendar-days"></i><span>My Attendance</span></button>
+      <button data-view="homework" type="button"><i data-icon="notebook-pen"></i><span>Homework</span></button>
+      <button data-view="exams" type="button"><i data-icon="chart-pie"></i><span>Exam Report</span></button>
+      <button data-view="profile" type="button"><i data-icon="user"></i><span>Profile</span></button>
+      <button data-view="password" type="button"><i data-icon="key-round"></i><span>Change Password</span></button>
+      <button data-view="settings" type="button"><i data-icon="settings"></i><span>Settings</span></button>
     </nav>
     <div class="nav-section-label">Quick Access</div>
-    <nav class="nav-mini">
-      <button data-view="staff"><span class="ico">👩‍🏫</span> Staff</button>
-      <button data-view="parents"><span class="ico">👨‍👩‍👧</span> Parents</button>
-      <button data-view="messages"><span class="ico">💬</span> Messages</button>
-      <button data-view="holidays"><span class="ico">📅</span> Holidays</button>
-      <button data-view="complaints"><span class="ico">🆘</span> Complaint Box</button>
-      <button data-view="datesheet"><span class="ico">📋</span> Date Sheet</button>
-      <button data-view="timetable"><span class="ico">🕒</span> Timetable</button>
-      <button data-view="heatmap"><span class="ico">🗺️</span> Heatmap</button>
-      <button data-view="studentid"><span class="ico">🪪</span> Student ID</button>
-      <button data-view="reviews"><span class="ico">🆘</span> Reviews</button>
-      <button data-view="qr">🔳 QR Attendance</button>
-      <button data-view="monthly">📆 Monthly</button>
-      <button data-view="enotes">📚 E-Notes</button>
-      <button data-view="features">✨ All Features</button>
+    <nav class="nav-mini" aria-label="More options">
+      <button data-view="staff" type="button"><i data-icon="users"></i><span>Staff</span></button>
+      <button data-view="parents" type="button"><i data-icon="user-plus"></i><span>Parents</span></button>
+      <button data-view="messages" type="button"><i data-icon="message-square"></i><span>Messages</span></button>
+      <button data-view="holidays" type="button"><i data-icon="calendar"></i><span>Holidays</span></button>
+      <button data-view="complaints" type="button"><i data-icon="circle-alert"></i><span>Complaint Box</span></button>
+      <button data-view="datesheet" type="button"><i data-icon="clipboard-list"></i><span>Date Sheet</span></button>
+      <button data-view="timetable" type="button"><i data-icon="clock"></i><span>Timetable</span></button>
+      <button data-view="heatmap" type="button"><i data-icon="grid-2x2"></i><span>Heatmap</span></button>
+      <button data-view="studentid" type="button"><i data-icon="badge-check"></i><span>Student ID</span></button>
+      <button data-view="reviews" type="button"><i data-icon="star"></i><span>Reviews</span></button>
+      <button data-view="qr" type="button"><i data-icon="qr-code"></i><span>QR Attendance</span></button>
+      <button data-view="monthly" type="button"><i data-icon="table-2"></i><span>Monthly</span></button>
+      <button data-view="enotes" type="button"><i data-icon="book-open"></i><span>E-Notes</span></button>
+      <button data-view="features" type="button"><i data-icon="zap"></i><span>All Features</span></button>
     </nav>
     <div class="sidebar-foot">
-      <div class="online"><span class="dot"></span> Online</div>
-      <div class="mode">🏫 School Mode</div>
-      <button class="btn-ghost" onclick="logout()">↪ Logout</button>
+      <div class="online"><span class="dot"></span> <span>Online</span></div>
+      <div class="mode"><i data-icon="graduation-cap"></i> School Mode</div>
+      <button class="btn-ghost" onclick="logout()" type="button"><i data-icon="log-out"></i><span>Logout</span></button>
     </div>
   </aside>
+  <div id="sidebarScrim" class="sidebar-scrim" onclick="closeSidebar()"></div>
 
   <!-- MAIN -->
   <div id="mainWrap">
     <header id="topbar">
-      <button id="menuBtn" class="icon-btn">☰</button>
-      <div id="topbarLogo" class="topbar-logo hidden"><img src="" alt="logo"></div>
-      <div class="search-wrap"><span>🔍</span><input id="globalSearch" placeholder="Search student, roll no, ID, teacher, class..." oninput="globalSearch()"></div>
+      <button id="menuBtn" class="icon-btn" type="button" aria-label="Open menu"><i data-icon="menu"></i></button>
+      <div id="topbarLogo" class="topbar-logo"><img src="" alt="School logo"></div>
+      <span id="pageTitle" class="page-title"></span>
+      <div class="search-wrap">
+        <span class="lead-ico"><i data-icon="search"></i></span>
+        <input id="globalSearch" placeholder="Search student, roll no, ID, teacher, class..." oninput="globalSearch()" aria-label="Search">
+      </div>
       <div class="top-right">
-        <div class="school-name"><span id="topSchoolName">Smart Attendance</span> <span id="topSession" class="session-badge">2026–27</span><span>🇮🇳 Govt. Recognised</span></div>
+        <div class="school-name"><span id="topSchoolName">Smart Attendance</span><span id="topSession" class="session-badge">2026–27</span><span>Govt. Recognised</span></div>
         <span id="roleBadge" class="role-badge">Admin</span>
-        <button class="icon-btn bell" onclick="toggleNotifPanel(event)">🔔<span id="bellDot" class="bell-dot"></span><span id="notifCount" class="hidden" style="position:absolute;top:2px;right:2px;background:var(--red);color:#fff;font-size:10px;border-radius:999px;padding:0 5px"></span></button>
+        <button class="icon-btn bell" onclick="toggleNotifPanel(event)" type="button" aria-label="Notifications"><i data-icon="bell"></i><span id="bellDot" class="bell-dot"></span><span id="notifCount" class="hidden"></span></button>
         <div id="notifPanel" class="notif-panel hidden"></div>
         <div class="profile" onclick="toggleProfile()">
           <img id="topAvatar" src="https://i.pravatar.cc/100?img=15" alt="">
-          <div><b id="topName">Mr. Sharma</b><small id="topRole">Teacher</small></div>
-          <span>▾</span>
+          <div class="prof-txt"><b id="topName">Mr. Sharma</b><small id="topRole">Teacher</small></div>
+          <span class="chev"><i data-icon="chevron-down"></i></span>
           <div id="profileDrop" class="profile-drop hidden">
             <div class="pd-head"><b id="pdName">Mr. Sharma</b><small id="pdRole">Teacher • Green Valley</small></div>
-            <button onclick="navigate('settings')">⚙️ Settings</button>
-            <button onclick="logout()">↪ Logout</button>
+            <button onclick="navigate('settings')" type="button"><i data-icon="settings"></i> Settings</button>
+            <button onclick="navigate('profile')" type="button"><i data-icon="user"></i> My Profile</button>
+            <button onclick="logout()" type="button" class="danger"><i data-icon="log-out"></i> Logout</button>
           </div>
         </div>
       </div>
     </header>
+
+    <div id="offlineBanner" class="offline-banner" role="status">
+      <i data-icon="wifi-off"></i> You are offline — data shown may be out of date.
+    </div>
 
     <main id="content">
       <!-- DASHBOARD -->
@@ -207,29 +257,42 @@
         <!-- Student / Parent portal home is rendered here; the staff KPI grid below
              is hidden for those roles via #view-dashboard.portal-mode -->
         <div id="portalHome" class="hidden" aria-live="polite"></div>
-        <div class="page-head"><div><h2>Dashboard</h2><p>Welcome back, <span id="dashTeacher">Admin</span>! Academic Session: <b id="dashSession">2026–27</b></p></div><div class="page-actions"><button class="btn-outline" onclick="loadDashboard()">⟳ Refresh</button><span id="todayBadge" class="badge-date"></span></div></div>
-        <div class="stat-grid six">
-          <div class="stat-card blue"><div class="stat-icon">👥</div><div><small>Total Students</small><b id="kpiTotal">-</b><span class="trend up" id="kpiTotalSub"></span></div></div>
-          <div class="stat-card green"><div class="stat-icon">✅</div><div><small>Present Today</small><b id="kpiPresent">-</b></div></div>
-          <div class="stat-card red"><div class="stat-icon">❌</div><div><small>Absent Today</small><b id="kpiAbsent">-</b></div></div>
-          <div class="stat-card blue"><div class="stat-icon">📊</div><div><small>Attendance Rate</small><b id="kpiRate">-</b></div></div>
-          <div class="stat-card yellow"><div class="stat-icon">🟡</div><div><small>Late Today</small><b id="kpiLate">-</b></div></div>
-          <div class="stat-card blue"><div class="stat-icon">🏫</div><div><small>Classes Active</small><b id="kpiClasses">-</b></div></div>
+        <div class="dash-hero">
+          <div class="dh-txt">
+            <small class="dh-kicker">Academic Session <b id="dashSession">2026–27</b></small>
+            <h2>Welcome back, <span id="dashTeacher">Admin</span> 👋</h2>
+            <p id="dashSchoolLine">Smart School Attendance Management System</p>
+            <div class="dh-actions">
+              <button class="btn-primary" onclick="navigate('attendance')"><i data-icon="clipboard-check"></i> Mark Attendance</button>
+              <button class="btn-ghost" onclick="navigate('reports')"><i data-icon="file-text"></i> View Reports</button>
+              <button class="btn-ghost" onclick="navigate('notifications')"><i data-icon="bell"></i> Notifications</button>
+            </div>
+          </div>
+          <div class="dh-badge" aria-hidden="true"><i data-icon="building-2"></i></div>
+          <span id="todayBadge" class="badge-date dh-date"></span>
         </div>
-        <div class="stat-grid" style="margin-top:12px">
-          <div class="stat-card yellow"><div class="stat-icon">🟡</div><div><small>Leave Today</small><b id="kpiLeave">-</b></div></div>
-          <div class="stat-card blue"><div class="stat-icon">👩‍🏫</div><div><small>Total Teachers</small><b id="kpiTeachers">-</b></div></div>
+        <div class="stat-grid six">
+          <div class="stat-card blue"><div class="stat-icon"><i data-icon="graduation-cap"></i></div><div><small>Total Students</small><b id="kpiTotal">-</b><span class="trend up" id="kpiTotalSub"></span></div></div>
+          <div class="stat-card green"><div class="stat-icon"><i data-icon="circle-check"></i></div><div><small>Present Today</small><b id="kpiPresent">-</b></div></div>
+          <div class="stat-card red"><div class="stat-icon"><i data-icon="circle-x"></i></div><div><small>Absent Today</small><b id="kpiAbsent">-</b></div></div>
+          <div class="stat-card blue"><div class="stat-icon"><i data-icon="chart-column"></i></div><div><small>Attendance Rate</small><b id="kpiRate">-</b></div></div>
+          <div class="stat-card yellow"><div class="stat-icon"><i data-icon="clock"></i></div><div><small>Late Today</small><b id="kpiLate">-</b></div></div>
+          <div class="stat-card blue"><div class="stat-icon"><i data-icon="building-2"></i></div><div><small>Classes Active</small><b id="kpiClasses">-</b></div></div>
+        </div>
+        <div class="stat-grid">
+          <div class="stat-card yellow"><div class="stat-icon"><i data-icon="user"></i></div><div><small>Leave Today</small><b id="kpiLeave">-</b></div></div>
+          <div class="stat-card blue"><div class="stat-icon"><i data-icon="user-check"></i></div><div><small>Total Teachers</small><b id="kpiTeachers">-</b></div></div>
         </div>
         <div class="grid-2">
           <div class="card">
-            <div class="card-head"><h3>Attendance Overview</h3><span class="live">● Live</span></div>
+            <div class="card-head"><h3><i data-icon="chart-pie"></i> Attendance Overview</h3><span class="live">Live</span></div>
             <div class="attendance-overview">
               <div class="donut-wrap"><div id="donut" class="donut" style="--p:93"><span>93%</span></div></div>
               <ul class="legend">
                 <li><span class="dot g"></span> Present <b id="legP">-</b></li>
                 <li><span class="dot r"></span> Absent <b id="legA">-</b></li>
                 <li><span class="dot y"></span> Late <b id="legT">-</b></li>
-                <li><span class="dot n" style="background:#3b82f6"></span> Leave <b id="legL">-</b></li>
+                <li><span class="dot l"></span> Leave <b id="legL">-</b></li>
                 <li><span class="dot n"></span> Not Marked <b id="legN">0</b></li>
               </ul>
             </div>
@@ -237,68 +300,113 @@
             <small class="muted">Weekly attendance % (last 7 days)</small>
           </div>
           <div class="card">
-            <div class="card-head"><h3>Quick Actions</h3></div>
+            <div class="card-head"><h3><i data-icon="zap"></i> Quick Actions</h3></div>
             <div class="quick-grid">
-              <button class="qa qa-blue" onclick="navigate('attendance')"><span>✅</span> Mark Attendance</button>
-              <button class="qa qa-green" onclick="navigate('students');openStudentModal()"><span>➕</span> Add Student</button>
-              <button class="qa qa-purple" onclick="navigate('reports')"><span>📑</span> View Reports</button>
-              <button class="qa qa-navy" onclick="navigate('classes')"><span>🏫</span> Manage Classes</button>
+              <button class="qa qa-blue" onclick="navigate('attendance')"><i data-icon="clipboard-check"></i> Mark Attendance</button>
+              <button class="qa qa-purple" onclick="navigate('reports')"><i data-icon="file-text"></i> View Reports</button>
+              <button class="qa qa-green" onclick="navigate('students')"><i data-icon="graduation-cap"></i> Students</button>
+              <button class="qa qa-navy" onclick="navigate('enotes')"><i data-icon="book-open"></i> E-Notes</button>
+              <button class="qa qa-navy" onclick="navigate('messages')"><i data-icon="message-square"></i> Messages</button>
+              <button class="qa qa-blue" onclick="navigate('students');openStudentModal()"><i data-icon="user-plus"></i> Add Student</button>
             </div>
+            <label class="check" style="margin-top:12px"><input type="checkbox" id="dashHideCC" onchange="toggleCommandCenter()"> Hide Smart Command Center</label>
           </div>
         </div>
         <div class="card">
-          <div class="card-head"><h3>Today's Attendance — Class Wise</h3><input type="date" id="dashDate" onchange="loadDashboard()"></div>
+          <div class="card-head"><h3><i data-icon="building-2"></i> Today's Attendance — Class Wise</h3><input type="date" id="dashDate" onchange="loadDashboard()"></div>
           <div id="todayClasses" class="class-bars"></div>
         </div>
-        <div class="card">
-          <div class="card-head"><h3>🏫 SMART SCHOOL COMMAND CENTER</h3><button class="btn-outline" onclick="loadCommandCenter()">Refresh Insights</button></div>
+        <div class="card" id="recentCard">
+          <div class="card-head"><h3><i data-icon="list-checks"></i> Recent Attendance Activity</h3><button class="btn-outline btn-sm" onclick="loadDashboard()"><i data-icon="refresh-cw"></i> Refresh</button></div>
+          <div id="recentActivity" class="list"></div>
+        </div>
+        <div class="card" id="ccCard">
+          <div class="card-head"><h3><i data-icon="layout-dashboard"></i> Smart School Command Center</h3><button class="btn-outline btn-sm" onclick="loadCommandCenter()"><i data-icon="refresh-cw"></i> Refresh Insights</button></div>
           <div class="grid-2">
-            <div><h4>🧠 Smart Insights</h4><div id="ccInsights" class="notice-grid"></div></div>
-            <div><h4>🔔 Alerts</h4><div id="ccAlerts" class="notice-grid"></div></div>
+            <div><div class="nav-sec-title">Smart Insights</div><div id="ccInsights" class="notice-grid"></div></div>
+            <div><div class="nav-sec-title">Alerts</div><div id="ccAlerts" class="notice-grid"></div></div>
           </div>
           <div class="grid-2" style="margin-top:12px">
-            <div><h4>🏆 Achievements</h4><div id="ccBadges" class="notice-grid"></div></div>
-            <div><h4>📅 Today's Timetable</h4><div id="ccTimetable" class="table-wrap"></div></div>
+            <div><div class="nav-sec-title">Achievements</div><div id="ccBadges" class="notice-grid"></div></div>
+            <div><div class="nav-sec-title">Today's Timetable</div><div id="ccTimetable" class="table-wrap"></div></div>
           </div>
-          <div class="card-head" style="margin-top:12px"><h4>🎯 My Attendance Goal</h4></div>
+          <div class="nav-sec-title">My Attendance Goal</div>
           <div id="ccGoal" class="muted">Login as student/parent to see goal, or select student in Students.</div>
         </div>
         <div class="grid-2">
-          <div class="card"><div class="card-head"><h3>🟢 Online • School Database</h3></div><div id="schoolInfo" class="muted"></div></div>
-          <div class="card"><div class="card-head"><h3>🇮🇳 Government School Dashboard</h3></div><p class="muted">Centralized attendance & management for Classes 1–12. Offline-capable, QR-enabled, WhatsApp integrated.</p></div>
+          <div class="card"><div class="card-head"><h3><i data-icon="shield-check"></i> School Database</h3></div><div id="schoolInfo" class="muted"></div></div>
+          <div class="card"><div class="card-head"><h3><i data-icon="building-2"></i> Government School Dashboard</h3></div><p class="muted">Centralized attendance &amp; management for Classes 1–12. Offline-capable, QR-enabled and role-secured.</p></div>
         </div>
       </section>
 
       <!-- STUDENTS -->
       <section class="view" id="view-students">
-        <div class="page-head"><div><h2>Students</h2><p>Manage all student profiles</p></div><button class="btn-primary" onclick="openStudentModal()">+ Add Student</button></div>
-        <div class="card toolbar"><input id="s_q" placeholder="🔍 Search by name, ID or roll number" oninput="loadStudents()"><select id="s_class" onchange="filterSection('#s_section');loadStudents()"></select><select id="s_section" onchange="loadStudents()"></select><button class="btn-outline" onclick="loadStudents()">Filter</button></div>
+        <div class="page-head"><div><h2>Students</h2><p>Manage all student profiles</p></div><button class="btn-primary" onclick="openStudentModal()"><i data-icon="user-plus"></i> Add Student</button></div>
+        <div class="card toolbar">
+          <div class="input-wrap grow"><span class="lead"><i data-icon="search"></i></span><input id="s_q" placeholder="Search by name, ID or roll number" oninput="loadStudents()"></div>
+          <select id="s_class" onchange="filterSection('#s_section');loadStudents()"></select><select id="s_section" onchange="loadStudents()"></select>
+          <button class="btn-outline" onclick="loadStudents()" type="button"><i data-icon="filter"></i> Filter</button>
+        </div>
         <div class="card"><div id="studentsTable" class="table-wrap"></div></div>
       </section>
 
       <!-- ATTENDANCE -->
       <section class="view" id="view-attendance">
-        <div class="page-head"><div><h2>Mark Attendance</h2><p id="attWeekday" class="muted"></p></div><span id="holidayWarn" class="pill warn hidden"></span></div>
+        <div class="page-head">
+          <div><h2>Mark Attendance</h2><p id="attWeekday" class="muted"></p></div>
+          <div class="page-actions">
+            <span id="holidayWarn" class="pill warn hidden"></span>
+            <span id="offlineBadge" class="pill warn hidden"><i data-icon="wifi-off"></i> Offline Mode</span>
+            <span id="attCount" class="pill n"></span>
+          </div>
+        </div>
         <div class="card toolbar">
           <select id="attSession" title="Academic Session"></select>
-          <input type="date" id="attDate" onchange="loadAttendance()" aria-label="Date">
+          <div class="btn-group" style="align-items:center">
+            <button class="btn-icon" onclick="attNav(-1)" type="button" aria-label="Previous day"><i data-icon="chevron-left"></i></button>
+            <input type="date" id="attDate" onchange="loadAttendance()" aria-label="Date">
+            <button class="btn-icon" onclick="attNav(1)" type="button" aria-label="Next day"><i data-icon="chevron-right"></i></button>
+            <button class="btn-outline btn-sm" onclick="attToday()" type="button">Today</button>
+          </div>
           <select id="attClass" onchange="filterSection('#attSection');loadAttendance()" aria-label="Class"></select>
           <select id="attSection" onchange="loadAttendance()" aria-label="Section"></select>
           <select id="attSubject" onchange="loadAttendance()" aria-label="Subject"><option value="">All Subjects</option></select>
-          <input id="attSearch" placeholder="Search student..." oninput="loadAttendance()" aria-label="Search student" style="min-width:140px">
-          <div class="btn-group"><button class="btn-outline" onclick="attNav(-1)">‹ Prev</button><button class="btn-outline" onclick="attToday()">Today</button><button class="btn-outline" onclick="attNav(1)">Next ›</button></div>
+          <div class="input-wrap grow" style="min-width:180px">
+            <span class="lead"><i data-icon="search"></i></span>
+            <input id="attSearch" placeholder="Search student..." oninput="loadAttendance()" aria-label="Search student">
+          </div>
         </div>
-        <div class="legend-row"><span class="pill g">🟢 Present (P)</span><span class="pill r">🔴 Absent (A)</span><span class="pill t">🟡 Late (T)</span><span class="pill n">🔵 Leave (L)</span></div>
+        <div class="legend-row">
+          <span class="pill g"><span class="dot g"></span> Present (P)</span>
+          <span class="pill r"><span class="dot r"></span> Absent (A)</span>
+          <span class="pill t"><span class="dot t"></span> Late (T)</span>
+          <span class="pill n"><span class="dot l"></span> Leave (L)</span>
+        </div>
         <div class="card toolbar">
-          <button class="btn-green" onclick="markAll('P')">Mark All Present</button>
-          <button class="btn-red" onclick="markAll('A')">Mark All Absent</button>
-          <button class="btn-outline" onclick="resetAttendance()">Reset</button>
-          <span class="muted" id="attCount"></span>
-          <span id="offlineBadge" class="pill warn hidden">Offline Mode</span>
+          <button class="btn-green" onclick="markAll('P')" type="button"><i data-icon="circle-check"></i> Mark All Present</button>
+          <button class="btn-red" onclick="markAll('A')" type="button"><i data-icon="circle-x"></i> Mark All Absent</button>
+          <button class="btn-outline" onclick="resetAttendance()" type="button"><i data-icon="refresh-cw"></i> Reset</button>
         </div>
         <div id="attSummary" class="stat-grid small"></div>
-        <div class="card"><div id="attTable" class="table-wrap"></div><div class="sticky-actions"><button class="btn-primary" onclick="confirmSaveAttendance()">💾 Save Attendance</button><button class="btn-green" onclick="completeAttendance()">✅ Complete & Share WhatsApp</button></div></div>
-        <div class="card"><h3>QR / Manual Scan</h3><div class="toolbar"><input id="scanCode" placeholder="Student ID / Scan QR"><select id="scanStatus"><option value="P">Present</option><option value="A">Absent</option><option value="T">Late</option><option value="L">Leave</option></select><button class="btn-primary" onclick="scanAttendance()">Mark</button></div></div>
+        <div class="card">
+          <div class="card-head"><h3><i data-icon="list-checks"></i> Student List</h3></div>
+          <div id="attTable" class="table-wrap"></div>
+          <div class="sticky-actions">
+            <button class="btn-primary" onclick="confirmSaveAttendance()" type="button"><i data-icon="clipboard-check"></i> Save Attendance</button>
+            <button class="btn-green" onclick="completeAttendance()" type="button"><i data-icon="send"></i> Complete &amp; Share</button>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3><i data-icon="qr-code"></i> QR / Manual Scan</h3></div>
+          <div class="toolbar">
+            <div class="input-wrap grow" style="min-width:180px">
+              <span class="lead"><i data-icon="qr-code"></i></span>
+              <input id="scanCode" placeholder="Student ID / Scan QR">
+            </div>
+            <select id="scanStatus"><option value="P">Present</option><option value="A">Absent</option><option value="T">Late</option><option value="L">Leave</option></select>
+            <button class="btn-primary" onclick="scanAttendance()" type="button"><i data-icon="zap"></i> Mark</button>
+          </div>
+        </div>
       </section>
       <!-- CALENDAR -->
       <section class="view" id="view-calendar">
@@ -315,15 +423,25 @@
           <div class="card"><h3>Monthly Trend</h3><div id="anaMonthly" class="chart-bar"></div></div>
         </div>
         <div class="grid-2">
-          <div class="card"><h3>⚠️ Low Attendance (&lt;75%)</h3><div id="anaLow" class="table-wrap"></div></div>
-          <div class="card"><h3>🏆 High Attendance (≥95%)</h3><div id="anaHigh" class="table-wrap"></div></div>
+          <div class="card"><div class="card-head"><h3><i data-icon="circle-alert"></i> Low Attendance (&lt;75%)</h3></div><div id="anaLow" class="table-wrap"></div></div>
+          <div class="card"><div class="card-head"><h3><i data-icon="award"></i> High Attendance (≥95%)</h3></div><div id="anaHigh" class="table-wrap"></div></div>
         </div>
         <div class="card"><h3>Audit Log (who marked/edited)</h3><div id="auditTable" class="table-wrap"></div></div>
       </section>
       <!-- NOTIFICATIONS -->
       <section class="view" id="view-notifications">
-        <div class="page-head"><div><h2>Notifications</h2></div><button class="btn-outline" onclick="markAllRead()">Mark all read</button></div>
-        <div id="notifList" class="notice-grid"></div>
+        <div class="page-head">
+          <div><h2>Notifications</h2><p>Attendance alerts, notices, e-notes and exam reminders</p></div>
+          <div class="page-actions">
+            <button class="btn-outline btn-sm" onclick="markAllRead()" type="button"><i data-icon="circle-check"></i> Mark all read</button>
+            <button class="btn-outline btn-sm" onclick="clearNotifications()" type="button"><i data-icon="trash-2"></i> Clear</button>
+          </div>
+        </div>
+        <div class="seg" id="notifTabs" role="tablist" aria-label="Notification filter">
+          <button type="button" class="active" data-f="all" onclick="setNotifFilter('all')">All</button>
+          <button type="button" data-f="unread" onclick="setNotifFilter('unread')">Unread</button>
+        </div>
+        <div id="notifList" class="list"></div>
       </section>
       <!-- TEACHERS -->
       <section class="view" id="view-teachers">
@@ -340,7 +458,7 @@
       </section>
       <!-- HEATMAP -->
       <section class="view" id="view-heatmap">
-        <div class="page-head"><div><h2>Attendance Heatmap</h2><p>🟢 High ≥90 • 🟡 Medium 75-89 • 🔴 Low &lt;75</p></div></div>
+        <div class="page-head"><div><h2>Attendance Heatmap</h2><p class="legend-row sm muted"><span><i class="cal-dot P"></i> High ≥90</span> <span><i class="cal-dot L"></i> Medium 75–89</span> <span><i class="cal-dot A"></i> Low &lt;75</span></p></div></div>
         <div class="card toolbar"><input type="month" id="heatMonth"><select id="heatSection"></select><button class="btn-primary" onclick="loadHeatmap()">Load</button></div>
         <div id="heatGrid" class="table-wrap card"></div>
       </section>
@@ -401,17 +519,96 @@
 
       <!-- DATESHEET -->
       <section class="view" id="view-datesheet">
-        <div class="page-head"><h2>Date Sheet</h2></div>
-        <div class="card toolbar" id="dsToolbar"><select id="dsClass"></select><select id="dsExam"><option>Unit Test 1</option><option>Unit Test 2</option><option>Mid-Term</option><option>Final-Term</option><option>Pre-Board</option></select><input id="dsSubject" placeholder="Subject"><input type="date" id="dsDate"><input type="time" id="dsTime"><button class="btn-primary" onclick="addDateSheet()">Add</button></div>
-        <div id="dsTable" class="table-wrap card"></div>
+        <div class="page-head">
+          <div><h2>Date Sheet</h2><p id="dsSub" class="muted">Examination schedule</p></div>
+          <div class="page-actions"><span id="dsCount" class="pill n"></span></div>
+        </div>
+        <div class="seg" id="dsTabs" role="tablist" aria-label="Exam status">
+          <button type="button" class="active" data-ds="upcoming" onclick="setDsTab('upcoming')">Upcoming</button>
+          <button type="button" data-ds="completed" onclick="setDsTab('completed')">Completed</button>
+        </div>
+        <div class="card toolbar" id="dsToolbar">
+          <select id="dsClass" aria-label="Class"></select>
+          <select id="dsExam" aria-label="Exam"><option>Unit Test 1</option><option>Unit Test 2</option><option>Mid-Term</option><option>Final-Term</option><option>Pre-Board</option></select>
+          <input id="dsSubject" placeholder="Subject">
+          <input type="date" id="dsDate">
+          <input type="time" id="dsTime">
+          <button class="btn-primary" onclick="addDateSheet()" type="button"><i data-icon="plus"></i> Add</button>
+        </div>
+        <div id="dsTable" class="list"></div>
       </section>
 
       <!-- REPORTS -->
       <section class="view" id="view-reports">
-        <div class="page-head"><h2>Reports</h2></div>
+        <div class="page-head">
+          <div><h2>Attendance Reports</h2><p>Live figures computed by the server — no manual entry</p></div>
+          <div class="page-actions">
+            <button class="btn-green btn-sm" onclick="exportReport('excel')" type="button"><i data-icon="file-spreadsheet"></i> Excel</button>
+            <button class="btn-red btn-sm" onclick="exportReport('pdf')" type="button"><i data-icon="file-down"></i> PDF</button>
+          </div>
+        </div>
+        <div class="seg" id="repRange" role="tablist" aria-label="Report range">
+          <button type="button" class="active" data-range="daily" onclick="setReportRange('daily')">Daily</button>
+          <button type="button" data-range="weekly" onclick="setReportRange('weekly')">Weekly</button>
+          <button type="button" data-range="monthly" onclick="setReportRange('monthly')">Monthly</button>
+        </div>
+        <div class="card toolbar">
+          <select id="repAClass" onchange="filterSection('#repASection');loadReports()" aria-label="Class"></select>
+          <select id="repASection" onchange="loadReports()" aria-label="Section"></select>
+          <div class="btn-group" style="align-items:center" id="repDateWrap">
+            <button class="btn-icon" onclick="reportNav(-1)" type="button" aria-label="Previous day"><i data-icon="chevron-left"></i></button>
+            <input type="date" id="repDate" onchange="loadReports()" aria-label="Date">
+            <button class="btn-icon" onclick="reportNav(1)" type="button" aria-label="Next day"><i data-icon="chevron-right"></i></button>
+          </div>
+          <input type="month" id="repMonth" onchange="loadReports()" aria-label="Month" class="hidden">
+          <button class="btn-primary" onclick="loadReports()" type="button"><i data-icon="refresh-cw"></i> Load</button>
+        </div>
+        <div id="repStats" class="stat-grid small"></div>
         <div class="grid-2">
-          <div class="card feature"><h3>📆 Monthly Report</h3><p>Class & section wise with working days</p><button class="btn-primary" onclick="navigate('monthly')">Open Monthly</button></div>
-          <div class="card feature"><h3>📝 Examination Report</h3><p>Marks & percentages</p><div class="toolbar"><select id="repClass"></select><select id="repExam"><option>Unit Test 1</option><option>Unit Test 2</option><option>Mid-Term</option><option>Final-Term</option><option>Pre-Board</option></select><button class="btn-outline" onclick="loadMarksReport()">Load</button></div></div>
+          <div class="card">
+            <div class="card-head"><h3><i data-icon="chart-pie"></i> Attendance Percentage</h3><span id="repRatePill" class="pill g">–</span></div>
+            <div class="attendance-overview">
+              <div class="donut-wrap"><div id="repDonut" class="donut" style="--p:0"><span>0%</span></div></div>
+              <ul class="legend" id="repLegend"></ul>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3><i data-icon="chart-column"></i> <span id="repChartTitle">Daily Trend</span></h3></div>
+            <div id="repChart" class="chart-bar"></div>
+          </div>
+        </div>
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-head"><h3><i data-icon="building-2"></i> Class-wise Overview</h3></div>
+            <div id="repClassBars" class="class-bars"></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3><i data-icon="circle-alert"></i> Low Attendance (&lt;75%)</h3></div>
+            <div id="repLow" class="table-wrap flush"></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3><i data-icon="list"></i> Student-wise History</h3></div>
+          <div id="repHistory" class="table-wrap"></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3><i data-icon="calendar-days"></i> Attendance Calendar</h3></div>
+          <div class="cal-head"><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span></div>
+          <div id="repCalGrid" class="calendar-grid"></div>
+          <div class="legend-row sm muted">
+            <span><i class="cal-dot P"></i> Present</span> <span><i class="cal-dot A"></i> Absent</span>
+            <span><i class="cal-dot L"></i> Leave</span> <span><i class="cal-dot T"></i> Late</span>
+          </div>
+        </div>
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-head"><h3><i data-icon="file-text"></i> Monthly Report</h3><button class="btn-outline btn-sm" onclick="navigate('monthly')" type="button"><i data-icon="arrow-right"></i> Open</button></div>
+            <p class="muted sm">Class &amp; section wise report with working days, totals and exports.</p>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3><i data-icon="chart-pie"></i> Examination Report</h3></div>
+            <div class="toolbar"><select id="repClass"></select><select id="repExam"><option>Unit Test 1</option><option>Unit Test 2</option><option>Mid-Term</option><option>Final-Term</option><option>Pre-Board</option></select><button class="btn-outline" onclick="loadMarksReport()" type="button">Load</button></div>
+          </div>
         </div>
         <div id="marksReport" class="table-wrap card"></div>
         <div class="card"><div class="toolbar"><input id="newSubject" placeholder="New subject"><button class="btn-outline" onclick="addSubject()">Add Subject</button><span id="subjectChips"></span></div></div>
@@ -419,15 +616,15 @@
 
       <!-- QR -->
       <section class="view" id="view-qr">
-        <div class="page-head"><h2>QR Attendance</h2></div>
+        <div class="page-head"><div><h2>QR Attendance</h2><p>Scan a student QR to mark attendance without typing</p></div></div>
         <div class="grid-2">
-          <div class="card qr-card"><h3>Generate / Show QR</h3><div class="toolbar"><input id="qrStudentId" placeholder="Student ID e.g. STU001"><button class="btn-primary" onclick="showQR()">Show QR</button></div><div id="qrDisplay" class="qr-display"></div><div class="btn-group"><button class="btn-navy" onclick="document.getElementById('qrStudentId').value && showQR()">🔳 Generate QR</button><button class="btn-outline" onclick="scanAttendance()">Manual</button></div></div>
-          <div class="card"><h3>How it works</h3><ol class="muted"><li>Open student profile → Show QR</li><li>Scan with device camera</li><li>Auto-mark Present/Absent/Leave</li></ol><div class="scan-success hidden" id="scanSuccess">✅ Scan Successful!</div></div>
+          <div class="card qr-card"><div class="card-head"><h3><i data-icon="qr-code"></i> Generate / Show QR</h3></div><div class="toolbar"><input id="qrStudentId" placeholder="Student ID e.g. STU001"><button class="btn-primary" onclick="showQR()" type="button"><i data-icon="qr-code"></i> Show QR</button></div><div id="qrDisplay" class="qr-display"></div><div class="btn-group"><button class="btn-navy" type="button" onclick="document.getElementById('qrStudentId').value && showQR()"><i data-icon="refresh-cw"></i> Generate QR</button><button class="btn-outline" type="button" onclick="scanAttendance()">Manual</button></div></div>
+          <div class="card"><div class="card-head"><h3><i data-icon="circle-help"></i> How it works</h3></div><ol class="muted"><li>Open student profile → Show QR</li><li>Scan with device camera</li><li>Auto-mark Present / Absent / Leave</li></ol><div class="scan-success hidden" id="scanSuccess"><i data-icon="circle-check"></i> Scan successful!</div></div>
         </div>
-        <div class="card" style="margin-top:12px"><h3>⏱️ Temporary Class QR (expires, anti-duplicate)</h3>
-          <div class="toolbar"><select id="qrTmpClass"></select><select id="qrTmpSection"></select><select id="qrTmpSubject"><option value="">No subject</option></select><button class="btn-primary" onclick="createTempQR()">Generate Temporary QR (5 min)</button></div>
+        <div class="card" style="margin-top:12px"><div class="card-head"><h3><i data-icon="clock"></i> Temporary Class QR (expires, anti-duplicate)</h3></div>
+          <div class="toolbar"><select id="qrTmpClass"></select><select id="qrTmpSection"></select><select id="qrTmpSubject"><option value="">No subject</option></select><button class="btn-primary" onclick="createTempQR()" type="button"><i data-icon="qr-code"></i> Generate Temporary QR (5 min)</button></div>
           <div id="qrTempDisplay" class="qr-display"></div>
-          <div class="toolbar"><input id="qrTempToken" placeholder="Paste QR token"><input id="qrTempCode" placeholder="Student ID"><button class="btn-green" onclick="scanTempQR()">Verify & Mark</button><button class="btn-navy" onclick="scanQRNative()">📷 Scan with Camera</button></div>
+          <div class="toolbar"><input id="qrTempToken" placeholder="Paste QR token"><input id="qrTempCode" placeholder="Student ID"><button class="btn-green" onclick="scanTempQR()" type="button"><i data-icon="circle-check"></i> Verify &amp; Mark</button><button class="btn-navy" onclick="scanQRNative()" type="button"><i data-icon="camera"></i> Scan with Camera</button></div>
           <small class="muted">Camera is used only for QR scanning. If permission is denied, paste the token manually.</small>
         </div>
       </section>
@@ -436,26 +633,49 @@
       <section class="view" id="view-features">
         <div class="page-head"><h2>Additional Features</h2></div>
         <div class="feature-grid">
-          <div class="feat-card" onclick="navigate('notices')"><span>📢</span><h4>Notice Board</h4><p>School announcements</p></div>
-          <div class="feat-card" onclick="navigate('enotes')"><span>📚</span><h4>E-Notes</h4><p>Digital learning content</p></div>
-          <div class="feat-card" onclick="navigate('meals')"><span>🍱</span><h4>Mid-Day Meal</h4><p>Govt. meal management</p></div>
-          <div class="feat-card" onclick="navigate('scholarship')"><span>🎓</span><h4>Scholarship & DBT</h4><p>Student records</p></div>
-          <div class="feat-card" onclick="navigate('complaints')"><span>📝</span><h4>Complaint Box</h4><p>Feedback & grievances</p></div>
-          <div class="feat-card" onclick="navigate('datesheet')"><span>📅</span><h4>Date Sheet</h4><p>Exam schedules</p></div>
-          <div class="feat-card" onclick="navigate('messages')"><span>💬</span><h4>Messages</h4><p>WhatsApp groups</p></div>
-          <div class="feat-card" onclick="navigate('settings')"><span>⚙️</span><h4>Settings & Branding</h4><p>School configuration</p></div>
+          <div class="feat-card" onclick="navigate('notices')"><div class="ficon"><i data-icon="megaphone"></i></div><h4>Notice Board</h4><p>School announcements</p></div>
+          <div class="feat-card" onclick="navigate('enotes')"><div class="ficon green"><i data-icon="book-open"></i></div><h4>E-Notes</h4><p>Digital learning content</p></div>
+          <div class="feat-card" onclick="navigate('meals')"><div class="ficon yellow"><i data-icon="clipboard-list"></i></div><h4>Mid-Day Meal</h4><p>Govt. meal management</p></div>
+          <div class="feat-card" onclick="navigate('scholarship')"><div class="ficon purple"><i data-icon="award"></i></div><h4>Scholarship &amp; DBT</h4><p>Student records</p></div>
+          <div class="feat-card" onclick="navigate('complaints')"><div class="ficon"><i data-icon="circle-alert"></i></div><h4>Complaint Box</h4><p>Feedback &amp; grievances</p></div>
+          <div class="feat-card" onclick="navigate('datesheet')"><div class="ficon green"><i data-icon="calendar-days"></i></div><h4>Date Sheet</h4><p>Exam schedules</p></div>
+          <div class="feat-card" onclick="navigate('messages')"><div class="ficon purple"><i data-icon="message-square"></i></div><h4>Messages</h4><p>WhatsApp groups</p></div>
+          <div class="feat-card" onclick="navigate('settings')"><div class="ficon yellow"><i data-icon="settings"></i></div><h4>Settings &amp; Branding</h4><p>School configuration</p></div>
         </div>
       </section>
 
       <!-- NOTICES -->
       <section class="view" id="view-notices">
-        <div class="page-head"><h2>Notice Board</h2></div>
-        <div class="card toolbar" id="noticeToolbar"><input id="noticeTitle" placeholder="Title"><input id="noticeContent" placeholder="Content"><button class="btn-primary" onclick="addNotice()">Post Notice</button></div>
+        <div class="page-head">
+          <div><h2>Notice Board</h2><p class="muted">School announcements, circulars and events</p></div>
+          <div class="page-actions"><span id="noticeCount" class="pill n"></span></div>
+        </div>
+        <div class="card toolbar" id="noticeToolbar"><input id="noticeTitle" placeholder="Title"><input id="noticeContent" placeholder="Content"><button class="btn-primary" onclick="addNotice()"><i data-icon="megaphone"></i> Post Notice</button></div>
         <div id="noticeList" class="notice-grid"></div>
       </section>
       <section class="view" id="view-enotes">
-        <div class="page-head"><h2>E-Notes</h2></div>
-        <div class="card toolbar" id="enoteToolbar"><input id="noteTitle" placeholder="Title"><input id="noteSubject" placeholder="Subject"><input id="noteContent" placeholder="Content / Link"><button class="btn-primary" onclick="addENote()">Add Note</button></div>
+        <div class="page-head">
+          <div><h2>E-Notes</h2><p id="enoteSub" class="muted">Digital learning material shared by teachers</p></div>
+          <div class="page-actions"><span id="enoteCount" class="pill n"></span></div>
+        </div>
+        <div class="card">
+          <div class="toolbar">
+            <div class="input-wrap grow" style="min-width:180px">
+              <span class="lead"><i data-icon="search"></i></span>
+              <input id="noteQ" placeholder="Search notes by title, subject or teacher" oninput="filterENotes()" aria-label="Search notes">
+            </div>
+          </div>
+          <div class="chips" id="noteSubjectChips" style="margin-top:10px"></div>
+        </div>
+        <div class="card form-card hidden" id="enoteToolbar">
+          <div class="card-head"><h3><i data-icon="notebook-pen"></i> Upload a new E-Note</h3></div>
+          <div class="form-grid">
+            <label>Title *<input id="noteTitle" placeholder="e.g. Chapter 4 — Quadratic Equations"></label>
+            <label>Subject *<input id="noteSubject" placeholder="e.g. Mathematics"></label>
+            <label style="grid-column:1/-1">Content / Link *<textarea id="noteContent" rows="3" placeholder="Write the note or paste a download link"></textarea></label>
+          </div>
+          <div class="modal-actions"><button class="btn-primary" onclick="addENote()" type="button"><i data-icon="upload"></i> Save Note</button></div>
+        </div>
         <div id="enoteList" class="card-grid"></div>
       </section>
       <section class="view" id="view-meals">
@@ -476,26 +696,72 @@
 
       <!-- SETTINGS -->
       <section class="view" id="view-settings">
-        <div class="page-head"><h2>Settings & Security</h2></div>
+        <div class="page-head">
+          <div><h2>Settings</h2><p>Profile, appearance, school branding and security</p></div>
+          <div class="page-actions"><button class="btn-outline btn-sm" onclick="logout()" type="button"><i data-icon="log-out"></i> Logout</button></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3><i data-icon="user"></i> My Account</h3></div>
+          <div class="kv">
+            <div class="kv-row"><span class="k">Name</span><span class="v" id="setName">–</span></div>
+            <div class="kv-row"><span class="k">Role</span><span class="v" id="setRole">–</span></div>
+            <div class="kv-row"><span class="k">Username</span><span class="v" id="setUsername">–</span></div>
+          </div>
+          <div class="menu-list" style="margin-top:12px">
+            <button class="menu-row" onclick="navigate('profile')" type="button"><i data-icon="user"></i> Profile &amp; personal details <i data-icon="chevron-right" class="chev"></i></button>
+            <button class="menu-row" onclick="navigate('password')" type="button"><i data-icon="key-round"></i> Change password <i data-icon="chevron-right" class="chev"></i></button>
+            <button class="menu-row" onclick="navigate('notifications')" type="button"><i data-icon="bell"></i> Notifications <i data-icon="chevron-right" class="chev"></i></button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3><i data-icon="moon"></i> Appearance</h3></div>
+          <div class="setting-row">
+            <div><b>Dark mode</b><div class="sm muted">Easier on the eyes at night</div></div>
+            <label class="switch"><input type="checkbox" id="setDarkMode" onchange="setTheme(this.checked?'dark':'light')"><span></span></label>
+          </div>
+          <div class="setting-row">
+            <div><b>Reduce motion</b><div class="sm muted">Turn off animations and transitions</div></div>
+            <label class="switch"><input type="checkbox" id="setReduceMotion" onchange="setReduceMotion(this.checked)"><span></span></label>
+          </div>
+          <div class="setting-row">
+            <div><b>Saved login</b><div class="sm muted">Stay signed in on this device</div></div>
+            <label class="switch"><input type="checkbox" id="setSavedLogin" checked onchange="setSavedLogin(this.checked)"><span></span></label>
+          </div>
+        </div>
+
         <div class="grid-2">
-          <div class="card"><h3>🏫 School Settings</h3><label>School Name</label><input id="setSchoolName"><label>Branding Color</label><input id="setColor" type="color"><label>Address</label><input id="setAddress" placeholder="School Address"><label>Contact</label><input id="setContact" placeholder="Phone">
+          <div class="card"><div class="card-head"><h3><i data-icon="building-2"></i> School Settings</h3></div><label>School Name</label><input id="setSchoolName"><label>Branding Color</label><input id="setColor" type="color"><label>Address</label><input id="setAddress" placeholder="School Address"><label>Contact</label><input id="setContact" placeholder="Phone">
             <div class="logo-upload-card">
-              <h4>🎨 School Logo</h4>
-              <div id="logoPreview" class="logo-preview"><span class="muted">No logo uploaded — shows 🎓</span></div>
+              <h4><i data-icon="palette"></i> School Logo</h4>
+              <div id="logoPreview" class="logo-preview"><span class="muted">No logo uploaded — shows the default mark</span></div>
               <div class="logo-actions">
-                <label class="btn-outline logo-choose">📁 Choose File<input type="file" id="logoFile" accept="image/png,image/jpeg,image/webp" hidden onchange="previewLogo(this)"></label>
-                <button class="btn-primary" onclick="uploadLogo()">⬆️ Upload Logo</button>
-                <button class="btn-ghost" onclick="removeLogo()" style="color:var(--red)">🗑️ Remove</button>
+                <label class="btn-outline logo-choose"><i data-icon="upload"></i> Choose File<input type="file" id="logoFile" accept="image/png,image/jpeg,image/webp" hidden onchange="previewLogo(this)"></label>
+                <button class="btn-primary admin-only" onclick="uploadLogo()" type="button">Upload Logo</button>
+                <button class="btn-outline admin-only" onclick="removeLogo()" type="button"><i data-icon="trash-2"></i> Remove</button>
               </div>
-              <small class="muted">PNG/JPG/WebP, max 2MB. Shows in sidebar & topbar instantly.</small>
-              <div id="logoLocalPreview" class="hidden" style="margin-top:8px"><img id="logoLocalImg" style="height:60px;border-radius:10px;border:1px solid #e2e8f0"></div>
+              <small class="muted">PNG/JPG/WebP, max 2MB. Shows in sidebar &amp; topbar instantly.</small>
+              <div id="logoLocalPreview" class="hidden" style="margin-top:8px"><img id="logoLocalImg" style="height:60px;border-radius:10px;border:1px solid var(--border)"></div>
             </div>
-            <button class="btn-primary" onclick="saveSettings()" style="margin-top:12px">Save Settings</button></div>
-          <div class="card"><h3>🔐 Security</h3><div class="setting-row"><span>Password Policy</span><label class="switch"><input type="checkbox" checked><span></span></label></div><div class="setting-row"><span>OTP Verification</span><label class="switch"><input type="checkbox"><span></span></label></div><div class="setting-row"><span>Saved Login</span><label class="switch"><input type="checkbox" checked><span></span></label></div><div class="setting-row"><span>Login Security</span><label class="switch"><input type="checkbox" checked><span></span></label></div><hr><h4>Roles & Permissions</h4><div id="permGrid" class="perm-grid"></div></div>
+            <button class="btn-primary" onclick="saveSettings()" style="margin-top:12px"><i data-icon="circle-check"></i> Save Settings</button></div>
+          <div class="card"><div class="card-head"><h3><i data-icon="shield-check"></i> Security</h3></div><div class="setting-row"><span>Password Policy</span><label class="switch"><input type="checkbox" checked><span></span></label></div><div class="setting-row"><span>OTP Verification</span><label class="switch"><input type="checkbox"><span></span></label></div><div class="setting-row"><span>Saved Login</span><label class="switch"><input type="checkbox" checked><span></span></label></div><div class="setting-row"><span>Login Security</span><label class="switch"><input type="checkbox" checked><span></span></label></div><hr><h4>Roles &amp; Permissions</h4><div id="permGrid" class="perm-grid"></div></div>
         </div>
         <div class="grid-2">
-          <div class="card"><h3>Users & Roles</h3><div class="toolbar"><input id="uName" placeholder="Username"><input id="uPass" type="password" placeholder="Password"><select id="uRole"><option>admin</option><option>teacher</option><option>student</option><option>parent</option></select><button class="btn-primary" onclick="addUser()">Create</button></div><div id="userTable" class="table-wrap"></div></div>
-          <div class="card"><h3>Login History</h3><div id="loginHistory" class="table-wrap"></div></div>
+          <div class="card"><div class="card-head"><h3><i data-icon="users"></i> Users &amp; Roles</h3></div><div class="toolbar"><input id="uName" placeholder="Username"><input id="uPass" type="password" placeholder="Password"><select id="uRole"><option>admin</option><option>teacher</option><option>student</option><option>parent</option></select><button class="btn-primary" onclick="addUser()" type="button"><i data-icon="user-plus"></i> Create</button></div><div id="userTable" class="table-wrap"></div></div>
+          <div class="card"><div class="card-head"><h3><i data-icon="clock"></i> Login History</h3></div><div id="loginHistory" class="table-wrap"></div></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3><i data-icon="info"></i> About Dynamic CuroBase</h3></div>
+          <div class="kv">
+            <div class="kv-row"><span class="k">Product</span><span class="v">Dynamic CuroBase</span></div>
+            <div class="kv-row"><span class="k">Version</span><span class="v">2.0 — Mobile First</span></div>
+            <div class="kv-row"><span class="k">Tagline</span><span class="v">Smarter Attendance | Better Learning | Brighter Future</span></div>
+          </div>
+          <p class="muted sm" style="margin-top:10px">Offline-capable PWA with role-based access enforced on the server for Admin, Teacher, Student and Parent accounts.</p>
+          <div class="menu-list" style="margin-top:10px">
+            <button class="menu-row danger" onclick="logout()" type="button"><i data-icon="log-out"></i> Logout</button>
+          </div>
         </div>
       </section>
 
@@ -507,9 +773,9 @@
         <div class="page-head">
           <div><h2>Attendance Calendar</h2><p id="attCalSub" class="muted"></p></div>
           <div class="page-actions">
-            <button class="btn-outline" onclick="shiftAttCal(-1)" aria-label="Previous month">‹ Prev</button>
+            <button class="btn-outline" onclick="shiftAttCal(-1)" aria-label="Previous month" type="button"><i data-icon="chevron-left"></i> Prev</button>
             <span id="attCalMonth" class="badge-date"></span>
-            <button class="btn-outline" onclick="shiftAttCal(1)" aria-label="Next month">Next ›</button>
+            <button class="btn-outline" onclick="shiftAttCal(1)" aria-label="Next month" type="button">Next <i data-icon="chevron-right"></i></button>
           </div>
         </div>
         <div id="attCalStats" class="stat-grid"></div>
@@ -544,46 +810,46 @@
 
       <!-- PROFILE SETTINGS (student / parent / staff) -->
       <section class="view" id="view-profile">
-        <div class="page-head"><h2>Profile Settings</h2></div>
+        <div class="page-head"><div><h2>Student Profile</h2><p id="profileSub" class="muted">Personal details, attendance and academics</p></div></div>
         <div id="profileCard" class="grid-2"></div>
       </section>
 
       <!-- CHANGE PASSWORD -->
       <section class="view" id="view-password">
-        <div class="page-head"><h2>Change Password</h2></div>
+        <div class="page-head"><div><h2>Change Password</h2><p>Update the password for your account</p></div></div>
         <div class="card" style="max-width:480px">
-          <h3>🔐 Update your password</h3>
-          <label for="curPw">Current Password *</label>
-          <div class="pwd-wrap"><input id="curPw" type="password" autocomplete="current-password" required>
-            <button type="button" onclick="toggleField('curPw')" aria-label="Show or hide password" tabindex="-1">👁️</button></div>
-          <label for="newPw">New Password * <small class="muted">(min 6 characters)</small></label>
-          <div class="pwd-wrap"><input id="newPw" type="password" autocomplete="new-password" required>
-            <button type="button" onclick="toggleField('newPw')" aria-label="Show or hide password" tabindex="-1">👁️</button></div>
-          <label for="confPw">Confirm New Password *</label>
-          <div class="pwd-wrap"><input id="confPw" type="password" autocomplete="new-password" required>
-            <button type="button" onclick="toggleField('confPw')" aria-label="Show or hide password" tabindex="-1">👁️</button></div>
-          <p id="pwMsg" class="warn" role="alert"></p>
-          <button class="btn-primary btn-block" onclick="changePassword()">Update Password</button>
+          <div class="card-head"><h3><i data-icon="key-round"></i> Update your password</h3></div>
+          <div class="field"><label for="curPw">Current Password *</label>
+            <div class="pwd-wrap"><input id="curPw" type="password" autocomplete="current-password" required>
+              <button type="button" onclick="toggleField('curPw')" aria-label="Show or hide password" tabindex="-1"><i data-icon="eye"></i></button></div></div>
+          <div class="field"><label for="newPw">New Password * <small class="muted">(min 6 characters)</small></label>
+            <div class="pwd-wrap"><input id="newPw" type="password" autocomplete="new-password" required>
+              <button type="button" onclick="toggleField('newPw')" aria-label="Show or hide password" tabindex="-1"><i data-icon="eye"></i></button></div></div>
+          <div class="field"><label for="confPw">Confirm New Password *</label>
+            <div class="pwd-wrap"><input id="confPw" type="password" autocomplete="new-password" required>
+              <button type="button" onclick="toggleField('confPw')" aria-label="Show or hide password" tabindex="-1"><i data-icon="eye"></i></button></div></div>
+          <p id="pwMsg" class="login-msg" role="alert"></p>
+          <button class="btn-primary btn-block" onclick="changePassword()"><i data-icon="shield-check"></i> Update Password</button>
         </div>
       </section>
 
       <!-- ACCESS DENIED -->
       <section class="view" id="view-denied">
-        <div class="card" style="text-align:center;padding:40px">
-          <div style="font-size:48px">🔒</div>
+        <div class="card empty" style="max-width:480px;margin:0 auto">
+          <div class="eic"><i data-icon="lock"></i></div>
           <h2>Access Denied</h2>
           <p class="muted">You don't have permission to access this feature. Your role: <b id="deniedRole">-</b></p>
           <p class="muted">Please contact Admin if you need access.</p>
-          <button class="btn-primary" onclick="navigate('dashboard')">← Back to Dashboard</button>
+          <button class="btn-primary" onclick="navigate('dashboard')"><i data-icon="arrow-left"></i> Back to Dashboard</button>
         </div>
       </section>
       <!-- 404 -->
       <section class="view" id="view-404">
-        <div class="card" style="text-align:center;padding:40px">
-          <div style="font-size:48px">🔍</div>
-          <h2>Page not found</h2>
-          <p class="muted">The page you requested does not exist.</p>
-          <button class="btn-primary" onclick="navigate('dashboard')">← Back to Dashboard</button>
+        <div class="card empty" style="text-align:center;padding:40px">
+          <div class="eic"><i data-icon="search"></i></div>
+          <h4>Page not found</h4>
+          <p>The page you requested does not exist.</p>
+          <button class="btn-primary" onclick="navigate('dashboard')"><i data-icon="arrow-left"></i> Back to Dashboard</button>
         </div>
       </section>
       <!-- NETWORK ERROR -->
@@ -601,7 +867,7 @@
 
 <!-- MODALS -->
 <div id="studentModal" class="modal"><div class="modal-content">
-  <div class="modal-head"><h3 id="studentModalTitle">Add Student</h3><button class="icon-btn" onclick="closeStudentModal()">✕</button></div>
+  <div class="modal-head"><h3 id="studentModalTitle">Add Student</h3><button class="icon-btn" onclick="closeStudentModal()" aria-label="Close"><i data-icon="circle-x"></i></button></div>
   <div class="form-grid">
     <label>Full Name*<input id="f_name" placeholder="e.g. Aarav Sharma" aria-label="Full Name"></label>
     <label>Student ID*<input id="f_student_id" placeholder="STU001" aria-label="Student ID"></label>
@@ -626,14 +892,14 @@
 </div></div>
 
 <div id="staffModal" class="modal"><div class="modal-content small">
-  <div class="modal-head"><h3>Add Staff</h3><button class="icon-btn" onclick="document.getElementById('staffModal').classList.remove('open')">✕</button></div>
+  <div class="modal-head"><h3>Add Staff</h3><button class="icon-btn" onclick="document.getElementById('staffModal').classList.remove('open')" aria-label="Close"><i data-icon="circle-x"></i></button></div>
   <label>Name<input id="staffName" placeholder="Mr. Verma"></label>
   <label>Role / Subject<input id="staffRole" placeholder="Mathematics"></label>
   <label>Phone<input id="staffPhone" placeholder="9876543210"></label>
   <button class="btn-primary btn-block" onclick="addStaff();document.getElementById('staffModal').classList.remove('open')">Save</button>
 </div></div>
 <div id="parentModal" class="modal"><div class="modal-content small">
-  <div class="modal-head"><h3>Add Parent</h3><button class="icon-btn" onclick="document.getElementById('parentModal').classList.remove('open')">✕</button></div>
+  <div class="modal-head"><h3>Add Parent</h3><button class="icon-btn" onclick="document.getElementById('parentModal').classList.remove('open')" aria-label="Close"><i data-icon="circle-x"></i></button></div>
   <label>Name<input id="parName" placeholder="Parent Name"></label>
   <label>Phone<input id="parPhone" placeholder="9876500000"></label>
   <label>Email<input id="parEmail" placeholder="parent@mail.com"></label>
@@ -641,7 +907,7 @@
   <button class="btn-primary btn-block" onclick="addParent();document.getElementById('parentModal').classList.remove('open')">Save</button>
 </div></div>
 <div id="teacherModal" class="modal"><div class="modal-content small">
-  <div class="modal-head"><h3>Add Teacher</h3><button class="icon-btn" onclick="document.getElementById('teacherModal').classList.remove('open')">✕</button></div>
+  <div class="modal-head"><h3>Add Teacher</h3><button class="icon-btn" onclick="document.getElementById('teacherModal').classList.remove('open')" aria-label="Close"><i data-icon="circle-x"></i></button></div>
   <label>Teacher ID<input id="t_id" placeholder="TCH001"></label>
   <label>Name*<input id="t_name" placeholder="Mr. Sharma"></label>
   <label>Email<input id="t_email" placeholder="teacher@school.edu"></label>
@@ -651,20 +917,40 @@
   <button class="btn-primary btn-block" onclick="addTeacher();document.getElementById('teacherModal').classList.remove('open')">Save</button>
 </div></div>
 <div id="confirmModal" class="modal"><div class="modal-content small">
-  <div class="modal-head"><h3>Confirm Save</h3></div>
+  <div class="modal-head"><h3><i data-icon="clipboard-check"></i> Confirm Save</h3></div>
   <p id="confirmText">Save attendance?</p>
-  <div class="modal-actions"><button class="btn-outline" onclick="document.getElementById('confirmModal').classList.remove('open')">Cancel</button><button class="btn-primary" onclick="doSaveAttendance()">Confirm Save</button></div>
+  <p class="muted sm">This writes official attendance records. Duplicate entries for the same student, class and date are prevented by the server.</p>
+  <div class="modal-actions"><button class="btn-outline" onclick="document.getElementById('confirmModal').classList.remove('open')">Cancel</button><button class="btn-primary" onclick="doSaveAttendance()"><i data-icon="circle-check"></i> Confirm Save</button></div>
 </div></div>
 
-<!-- Mobile bottom navigation (student/parent/teacher focused) -->
+<!-- Mobile bottom navigation — items are rebuilt per role by buildMobileNav() -->
 <nav id="mobileNav" aria-label="Mobile navigation">
-  <button data-mview="dashboard" class="active" onclick="navigate('dashboard')">🏠<span>Home</span></button>
-  <button data-mview="attendance" onclick="navigate('attendance')">✓<span>Attendance</span></button>
-  <button data-mview="timetable" onclick="navigate('timetable')">📅<span>Timetable</span></button>
-  <button data-mview="notifications" onclick="navigate('notifications')">🔔<span>Notices</span></button>
-  <button data-mview="studentid" onclick="navigate('studentid')">👤<span>Profile</span></button>
+  <button data-mview="dashboard" class="active" type="button" onclick="navigate('dashboard')"><i data-icon="house"></i><span>Home</span></button>
+  <button data-mview="attendance" type="button" onclick="navigate('attendance')"><i data-icon="clipboard-check"></i><span>Attendance</span></button>
+  <button data-mview="reports" type="button" onclick="navigate('reports')"><i data-icon="file-text"></i><span>Reports</span></button>
+  <button data-mview="messages" type="button" onclick="navigate('messages')"><i data-icon="message-square"></i><span>Messages</span></button>
+  <button data-more type="button" onclick="openMoreSheet()"><i data-icon="ellipsis"></i><span>More</span></button>
 </nav>
+
+<!-- "More" bottom sheet for rare destinations on mobile -->
+<div id="moreSheet" class="sheet" role="dialog" aria-modal="true" aria-label="More options">
+  <div class="sheet-scrim" onclick="closeMoreSheet()"></div>
+  <div class="sheet-body">
+    <div class="sheet-grab"></div>
+    <div class="between" style="margin-bottom:10px">
+      <h3 class="sheet-title">More</h3>
+      <button class="btn-icon" onclick="closeMoreSheet()" type="button" aria-label="Close"><i data-icon="circle-x"></i></button>
+    </div>
+    <div id="moreSheetGrid" class="sheet-grid"></div>
+    <div class="menu-list" style="margin-top:14px">
+      <button class="menu-row" onclick="closeMoreSheet();navigate('settings')" type="button"><i data-icon="settings"></i> Settings <i data-icon="chevron-right" class="chev"></i></button>
+      <button class="menu-row" onclick="closeMoreSheet();navigate('profile')" type="button"><i data-icon="user"></i> My Profile <i data-icon="chevron-right" class="chev"></i></button>
+      <button class="menu-row danger" onclick="logout()" type="button"><i data-icon="log-out"></i> Logout</button>
+    </div>
+  </div>
+</div>
 <div id="toast"></div>
+<script src="icons.js"></script>
 <script src="portal.js"></script>
 <script src="app.js"></script>
 <script>

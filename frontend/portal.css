@@ -10,11 +10,11 @@
 .login-card label.check input[type=checkbox]{width:auto!important;padding:0;margin:0;flex:none;accent-color:var(--navy)}
 #studentLoginSchoolInfo:empty,#parentLoginSchoolInfo:empty{display:none}
 .login-role-icon{
-  width:66px;height:66px;border-radius:20px;display:flex;align-items:center;
-  justify-content:center;font-size:34px;background:#dbeafe;margin:0 auto 10px;
-  box-shadow:var(--shadow);
+  width:58px;height:58px;border-radius:18px;display:flex;align-items:center;
+  justify-content:center;font-size:28px;background:var(--grad);color:#fff;margin:0 auto 12px;
+  box-shadow:0 14px 28px -14px rgba(37,99,235,.9);
 }
-.login-role-icon.parent{background:#ede9fe}
+.login-role-icon.parent{background:linear-gradient(135deg,#0ea5e9,#2563eb)}
 .login-card h2{text-align:center}
 .login-alt-links{
   display:flex;gap:16px;justify-content:center;flex-wrap:wrap;margin-top:14px;
@@ -34,16 +34,18 @@
 #view-exams .stat-grid{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
 
 /* ---------- child switcher ---------- */
-.child-switch{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
-.chip{
-  border:1px solid var(--border);background:#fff;border-radius:14px;padding:8px 14px;
+.child-switch{display:flex;gap:9px;flex-wrap:wrap;margin-bottom:13px}
+.child-switch .chip{
+  border:1px solid var(--border);background:#fff;border-radius:14px;padding:9px 15px;
   font-size:13px;font-weight:600;cursor:pointer;color:var(--text);text-align:center;
-  font-family:inherit;
+  font-family:inherit;transition:.16s var(--ease);box-shadow:var(--shadow);min-height:44px;
 }
-.chip small{display:block;font-weight:500;color:var(--muted);font-size:11px}
-.chip.active{background:var(--navy);border-color:var(--navy);color:#fff}
-.chip.active small{color:#c7d2fe}
-.chip:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+.child-switch .chip small{display:block;font-weight:500;color:var(--muted);font-size:11px}
+.child-switch .chip.active{background:var(--grad);border-color:transparent;color:#fff;
+  box-shadow:0 12px 22px -14px rgba(37,99,235,.95)}
+.child-switch .chip.active small{color:rgba(255,255,255,.85)}
+.child-switch .chip:hover{border-color:var(--blue-500)}
+.child-switch .chip:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
 
 /* ---------- profile card ---------- */
 .pf-card{display:flex;flex-direction:column;gap:14px}
@@ -56,6 +58,9 @@
 .pf-top h3{margin:0 0 4px}
 .pf-top p{margin:0 0 6px;font-size:13px}
 .pf-rows{display:grid;gap:6px}
+.card-head.pf-sub{display:flex;align-items:center;gap:7px;margin-top:14px;padding-top:12px;
+  border-top:1px solid var(--border);font-size:12.5px;font-weight:600;color:var(--muted)}
+.card-head.pf-sub .ic{width:15px;height:15px}
 .pf-row{
   display:flex;justify-content:space-between;gap:12px;padding:8px 10px;
   background:#f8fafc;border-radius:8px;font-size:13px;
@@ -116,10 +121,6 @@
 .hw-foot{margin-top:10px;font-size:12px;color:var(--muted)}
 
 /* ---------- exam report ---------- */
-.grade-badge{
-  background:#dcfce7;color:#166534;border:1px solid #bbf7d0;border-radius:10px;
-  padding:4px 12px;font-weight:700;font-size:14px;
-}
 .exam-mini{display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap}
 .exam-mini p{margin:0}
 

@@ -1,5 +1,16 @@
-const CACHE='attendance-v3';
-const ASSETS=['/','/style.css','/app.js','/manifest.json','/icon-192.png'];
+const CACHE='dynamic-curo-v4';
+const ASSETS=[
+  '/',
+  '/index.html',
+  '/style.css',
+  '/portal.css',
+  '/app.js',
+  '/portal.js',
+  '/icons.js',
+  '/manifest.json',
+  '/icon-192.png',
+  '/icon-512.png'
+];
 self.addEventListener('install',e=>{
   e.waitUntil(caches.open(CACHE).then(c=>c.addAll(ASSETS)));
   self.skipWaiting();

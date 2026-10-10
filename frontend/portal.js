@@ -151,6 +151,7 @@ async function enterPortal(j, mode){
   const ls = q('#loginScreen'); if (ls) ls.style.display = 'none';
   const sh = q('#appShell');    if (sh) sh.classList.remove('hidden');
   if (typeof filterNavByRole === 'function') filterNavByRole(state.role);
+  if (typeof buildMobileNav === 'function') buildMobileNav();
   await loadPortalMe();
   const name = portalAccountName();
   paintTopbar(name, state.role);
@@ -252,9 +253,12 @@ function calendarGrid(days){
   return out;
 }
 
-function stat(label, value, icon, cls){
-  return '<div class="stat-card ' + (cls || 'blue') + '"><div class="stat-icon">' + (icon || '📊') + '</div>' +
-         '<div><small>' + esc(label) + '</small><b>' + esc(value) + '</b></div></div>';
+function stat(label, value, iconName, cls){
+  var v = String(value == null ? '' : value);
+  var size = v.length > 5 ? ' txt' : '';
+  return '<div class="stat-card ' + (cls || 'blue') + '"><div class="stat-icon">' +
+         icon(iconName || 'chart-column') + '</div>' +
+         '<div><small>' + esc(label) + '</small><b class="stat-v' + size + '">' + esc(v) + '</b></div></div>';
 }
 
 function childSwitcher(){
@@ -270,17 +274,19 @@ function childSwitcher(){
 function profileCard(s){
   if (!s) return '';
   const photo = s.photo ? (be() + '/api/photos/' + s.photo) : '';
-  const row = (k, v) => '<div class="pf-row"><span>' + esc(k) + '</span><b>' + esc(v || '—') + '</b></div>';
+  const initials = (s.name || '?').trim().split(/\s+/).slice(0,2).map(w=>w[0]||'').join('').toUpperCase();
+  const row = (k, v) => '<div class="kv-row"><span class="k">' + esc(k) + '</span><span class="v">' + esc(v || '—') + '</span></div>';
   return '<div class="card pf-card">' +
-    '<div class="pf-top">' +
-      (photo ? '<img class="pf-photo" src="' + photo + '" alt="Photo of ' + esc(s.name) + '">'
-             : '<div class="pf-photo placeholder" aria-hidden="true">🎓</div>') +
+    '<div class="profile-hero">' +
+      (photo ? '<img class="avatar lg" src="' + photo + '" alt="Photo of ' + esc(s.name) + '">'
+             : '<div class="avatar lg" aria-hidden="true">' + esc(initials) + '</div>') +
       '<div><h3>' + esc(s.name) + '</h3>' +
-      '<p class="muted">' + esc(s.class_name || '') + ' — ' + esc(s.section_name || '') +
+      '<p>' + esc(s.class_name || '') + ' — ' + esc(s.section_name || '') +
       ' • Roll ' + esc(s.roll_no || '—') + '</p>' +
-      '<span class="pill">' + esc(s.student_id || '') + '</span></div>' +
+      '<span class="pill n" style="margin-top:7px;background:rgba(255,255,255,.2);border-color:rgba(255,255,255,.3);color:#fff">' +
+      esc(s.student_id || '') + '</span></div>' +
     '</div>' +
-    '<div class="pf-rows">' +
+    '<div class="kv" style="margin-top:13px">' +
       row('Student ID', s.student_id) +
       row('Admission No.', s.admission_no) +
       row('Class', s.class_name) +
@@ -293,26 +299,30 @@ function profileCard(s){
       row('Address', s.address) +
     '</div>' +
     '<div class="pf-actions">' +
-      '<button class="btn-outline" onclick="navigate(\'profile\')">⚙️ Profile Settings</button>' +
-      '<button class="btn-outline" onclick="navigate(\'password\')">🔑 Change Password</button>' +
-      '<button class="btn-ghost" onclick="logout()">↪ Logout</button>' +
+      '<button class="btn-outline" onclick="navigate(\'profile\')">' + icon('user') + ' Profile</button>' +
+      '<button class="btn-outline" onclick="navigate(\'password\')">' + icon('key-round') + ' Change Password</button>' +
+      '<button class="btn-outline" onclick="logout()">' + icon('log-out') + ' Logout</button>' +
     '</div></div>';
 }
 
 function homeworkItem(h){
   const cls = h.status === 'Overdue' ? 'danger' : (h.status === 'Due soon' ? 'warn' : 'ok');
-  return '<div class="card hw-card ' + cls + '">' +
-    '<div class="hw-head"><b>' + esc(h.title) + '</b>' +
-    '<span class="pill ' + cls + '">' + esc(h.status || '') + '</span></div>' +
-    (h.subject ? '<small class="muted">' + esc(h.subject) + '</small>' : '') +
-    (h.description ? '<p>' + esc(h.description) + '</p>' : '') +
-    '<div class="hw-foot"><span>📅 ' + esc(h.due_date || 'No due date') + '</span></div></div>';
+  const tone = h.status === 'Overdue' ? 'red' : (h.status === 'Due soon' ? 'yellow' : 'green');
+  return '<div class="list-row" style="cursor:default">' +
+    '<div class="ri ' + tone + '">' + icon('notebook-pen') + '</div>' +
+    '<div class="body"><b>' + esc(h.title) + '</b>' +
+    (h.subject ? '<p>' + esc(h.subject) + '</p>' : '') +
+    (h.description ? '<p class="muted">' + esc(h.description) + '</p>' : '') +
+    '<div class="sm muted" style="margin-top:4px">' + icon('calendar') + ' Due ' + esc(h.due_date || '—') + '</div></div>' +
+    '<span class="pill ' + (tone === 'green' ? 'g' : tone === 'yellow' ? 'y' : 'r') + '">' + esc(h.status || '') + '</span>' +
+    '</div>';
 }
 
 function noticeItem(n){
-  return '<div class="card notice-card"><b>' + esc(n.title) + '</b>' +
+  return '<div class="notice-card">' +
+    '<b>' + esc(n.title) + '</b>' +
     '<p class="muted">' + esc(n.content) + '</p>' +
-    '<small class="muted">' + esc(n.date) + '</small></div>';
+    '<div class="meta"><span>' + icon('calendar') + ' ' + esc(n.date) + '</span></div></div>';
 }
 
 /* ---------------- student / parent HOME ---------------- */
@@ -355,32 +365,62 @@ function renderPortalHome(ov, mk){
   const hw = ov.homework || {};
   const notices = ov.notices || [];
   const upcoming = ov.upcoming_exams || [];
+  const todayLabel = ov.today ? STATUS_LABEL[ov.today] : 'Not marked';
+  const todayTone = ov.today === 'P' ? 'g' : ov.today === 'A' ? 'r' : ov.today ? 'y' : 'n';
 
   let out = childSwitcher();
 
-  out += '<div class="page-head"><div><h2>' +
-    (isParent ? 'Parent Dashboard' : 'Student Dashboard') + '</h2>' +
-    '<p class="muted">' + esc(s.name || '') + ' • ' + esc(s.class_name || '') + '-' +
-    esc(s.section_name || '') + ' • Session 2026–27</p></div>' +
-    '<div class="page-actions">' +
-    '<button class="btn-outline" onclick="loadPortalHome()">⟳ Refresh</button>' +
-    '<span class="badge-date">' + esc(new Date().toLocaleDateString('en-IN',
-      {weekday:'short', day:'2-digit', month:'short', year:'numeric'})) + '</span></div></div>';
-
-  out += '<div class="stat-grid">' +
-    stat('Attendance', (st.percentage !== undefined ? st.percentage : 0) + '%', '📊', 'blue') +
-    stat('Today', ov.today ? STATUS_LABEL[ov.today] : 'Not marked', '🕐', ov.today === 'A' ? 'red' : 'green') +
-    stat('Present', st.present || 0, '✅', 'green') +
-    stat('Absent', st.absent || 0, '❌', 'red') +
-    stat('Leave', st.leave || 0, '🟡', 'yellow') +
-    stat('Homework Due', hw.due_soon || 0, '📝', 'blue') +
+  /* ---- welcome hero (Screen 6) ---- */
+  out += '<div class="dash-hero portal-hero">' +
+    '<div class="dh-txt">' +
+      '<small class="dh-kicker">' + (isParent ? 'Parent Dashboard' : 'Student Dashboard') + '</small>' +
+      '<h2>Hello, ' + esc((s.name || '').split(' ')[0] || 'there') + ' 👋</h2>' +
+      '<p>' + esc(s.class_name || '') + ' — Section ' + esc(s.section_name || '') +
+      ' • Roll ' + esc(s.roll_no || '—') + '</p>' +
+      '<div class="dh-actions">' +
+        '<button class="btn-primary" onclick="navigate(\'attcal\')">' + icon('calendar-days') + ' Attendance Report</button>' +
+        '<button class="btn-ghost" onclick="navigate(\'exams\')">' + icon('chart-pie') + ' Exam Report</button>' +
+      '</div>' +
+    '</div>' +
+    '<div class="dh-badge" aria-hidden="true">' + icon('graduation-cap') + '</div>' +
+    '<span class="badge-date dh-date">' + esc(new Date().toLocaleDateString('en-IN',
+      {weekday:'short', day:'2-digit', month:'short'})) + '</span>' +
     '</div>';
 
-  out += '<div class="grid-2" style="margin-top:12px">';
+  /* ---- today's status strip ---- */
+  out += '<div class="today-strip ' + (ov.today ? 'has' : '') + '">' +
+    '<div class="ts-ic">' + icon('calendar-days') + '</div>' +
+    '<div class="ts-body"><b>Today\'s attendance</b>' +
+    '<span class="muted">' + esc(new Date().toLocaleDateString('en-IN',
+      {weekday:'long', day:'2-digit', month:'long', year:'numeric'})) + '</span></div>' +
+    '<span class="pill ' + todayTone + '">' + esc(todayLabel) + '</span></div>';
+
+  out += '<div class="stat-grid">' +
+    stat('Attendance', (st.percentage !== undefined ? st.percentage : 0) + '%', 'chart-column', 'blue') +
+    stat('Today', todayLabel, 'calendar-days', ov.today === 'A' ? 'red' : (ov.today ? 'green' : 'blue')) +
+    stat('Present', st.present || 0, 'circle-check', 'green') +
+    stat('Absent', st.absent || 0, 'circle-x', 'red') +
+    stat('Leave', st.leave || 0, 'user', 'yellow') +
+    stat('Homework Due', hw.due_soon || 0, 'notebook-pen', 'blue') +
+    '</div>';
+
+  /* ---- shortcuts ---- */
+  out += '<div class="shortcut-grid">' +
+    '<button class="shortcut" type="button" onclick="navigate(\'attcal\')">' +
+      '<span class="sc-ic green">' + icon('calendar-days') + '</span><b>Attendance</b><small>Calendar &amp; history</small></button>' +
+    '<button class="shortcut" type="button" onclick="navigate(\'enotes\')">' +
+      '<span class="sc-ic blue">' + icon('book-open') + '</span><b>E-Notes</b><small>Study material</small></button>' +
+    '<button class="shortcut" type="button" onclick="navigate(\'exams\')">' +
+      '<span class="sc-ic purple">' + icon('chart-pie') + '</span><b>Exam Report</b><small>Marks &amp; grades</small></button>' +
+    '<button class="shortcut" type="button" onclick="navigate(\'datesheet\')">' +
+      '<span class="sc-ic yellow">' + icon('clipboard-list') + '</span><b>Date Sheet</b><small>Upcoming exams</small></button>' +
+    '</div>';
+
+  out += '<div class="grid-2" style="margin-top:14px">';
 
   /* --- attendance calendar --- */
-  out += '<div class="card"><div class="card-head"><h3>📅 Attendance — ' + esc(ov.month || '') + '</h3>' +
-    '<button class="btn-outline" onclick="navigate(\'attcal\')">Full calendar</button></div>' +
+  out += '<div class="card"><div class="card-head"><h3>' + icon('calendar-days') + ' Attendance — ' + esc(ov.month || '') + '</h3>' +
+    '<button class="btn-outline btn-sm" onclick="navigate(\'attcal\')">Full calendar</button></div>' +
     calendarGrid(ov.calendar) +
     '<div class="att-legend">' +
       '<span><i class="sw p"></i> Present</span><span><i class="sw a"></i> Absent</span>' +
@@ -390,22 +430,22 @@ function renderPortalHome(ov, mk){
     '<p class="muted sm">Working days: <b>' + (st.working || 0) + '</b> • Late: <b>' + (st.late || 0) + '</b></p></div>';
 
   /* --- homework --- */
-  out += '<div class="card"><div class="card-head"><h3>📝 Homework</h3>' +
-    '<button class="btn-outline" onclick="navigate(\'homework\')">View all</button></div>';
+  out += '<div class="card"><div class="card-head"><h3>' + icon('notebook-pen') + ' Homework</h3>' +
+    '<button class="btn-outline btn-sm" onclick="navigate(\'homework\')">View all</button></div>';
   const hwRows = (portal._hwCache && portal._hwCache.pk === portal.childPk)
     ? (portal._hwCache.rows || []) : [];
-  out += hwRows.length
+  out += '<div class="list">' + (hwRows.length
     ? hwRows.slice(0, 4).map(homeworkItem).join('')
-    : '<p class="muted">No homework has been assigned yet.</p>';
+    : '<div class="inline-empty">No homework has been assigned yet.</div>') + '</div>';
   out += '</div>';
 
   out += '</div>'; // grid-2
 
-  out += '<div class="grid-2" style="margin-top:12px">';
+  out += '<div class="grid-2" style="margin-top:14px">';
 
   /* --- exam report summary --- */
-  out += '<div class="card"><div class="card-head"><h3>📊 Exam Report</h3>' +
-    '<button class="btn-outline" onclick="navigate(\'exams\')">View marks</button></div>';
+  out += '<div class="card"><div class="card-head"><h3>' + icon('chart-pie') + ' Exam Report</h3>' +
+    '<button class="btn-outline btn-sm" onclick="navigate(\'exams\')">View marks</button></div>';
   if (latest){
     out += '<div class="exam-mini"><b>' + esc(latest.exam_type) + '</b>' +
       '<span class="grade-badge">' + esc(latest.grade) + '</span>' +
@@ -417,28 +457,31 @@ function renderPortalHome(ov, mk){
         (r.percentage == null ? '—' : r.percentage + '%') + '</td><td>' + esc(r.grade) + '</td></tr>').join('') +
       '</tbody></table></div>';
   } else {
-    out += '<p class="muted">No marks published yet.</p>';
+    out += '<div class="inline-empty">No marks published yet.</div>';
   }
   out += '</div>';
 
-  /* --- profile --- */
-  out += profileCard(s);
+  /* --- notices --- */
+  out += '<div class="card"><div class="card-head"><h3>' + icon('megaphone') + ' School Notices</h3>' +
+    '<button class="btn-outline btn-sm" onclick="navigate(\'notices\')">All notices</button></div>' +
+    '<div class="notice-grid">' + (notices.length ? notices.slice(0, 3).map(noticeItem).join('')
+                    : '<div class="inline-empty">No notices yet.</div>') + '</div></div>';
 
   out += '</div>';
 
-  /* --- notices + date sheet --- */
-  out += '<div class="grid-2" style="margin-top:12px">';
-  out += '<div class="card"><div class="card-head"><h3>📢 School Notices</h3>' +
-    '<button class="btn-outline" onclick="navigate(\'notices\')">All notices</button></div>' +
-    (notices.length ? notices.slice(0, 3).map(noticeItem).join('')
-                    : '<p class="muted">No notices yet.</p>') + '</div>';
-  out += '<div class="card"><div class="card-head"><h3>📋 Upcoming Exams</h3>' +
-    '<button class="btn-outline" onclick="navigate(\'datesheet\')">Date sheet</button></div>' +
-    (upcoming.length
-      ? '<div class="table-wrap"><table><thead><tr><th>Exam</th><th>Subject</th><th>Date</th><th>Time</th></tr></thead><tbody>' +
-        upcoming.map(d => '<tr><td>' + esc(d.exam_type) + '</td><td>' + esc(d.subject) + '</td><td>' +
-          esc(d.date) + '</td><td>' + esc(d.time) + '</td></tr>').join('') + '</tbody></table></div>'
-      : '<p class="muted">No date sheet published yet.</p>') + '</div>';
+  /* --- upcoming exams --- */
+  out += '<div class="card" style="margin-top:14px"><div class="card-head"><h3>' + icon('clipboard-list') + ' Upcoming Exams</h3>' +
+    '<button class="btn-outline btn-sm" onclick="navigate(\'datesheet\')">Date sheet</button></div>';
+  out += upcoming.length
+    ? '<div class="list">' + upcoming.map(d => {
+        const dt = new Date(d.date + 'T00:00:00');
+        return '<div class="ds-row"><div class="ds-date"><b>' + (isNaN(dt) ? '' : dt.getDate()) +
+          '</b><span>' + (isNaN(dt) ? '' : dt.toLocaleDateString('en-IN',{month:'short'})) +
+          '</span><small>' + (isNaN(dt) ? '' : dt.toLocaleDateString('en-IN',{weekday:'short'})) + '</small></div>' +
+          '<div class="db"><b>' + esc(d.subject) + '</b><span>' + esc(d.exam_type) +
+          (d.time ? ' • ' + esc(d.time) : '') + '</span></div></div>';
+      }).join('') + '</div>'
+    : '<div class="inline-empty">No date sheet published yet.</div>';
   out += '</div>';
 
   return out;
@@ -465,11 +508,11 @@ async function loadAttCal(){
     if (subEl) subEl.textContent = (activeChildName() || (portal.me.student && portal.me.student.name) || '') +
       ' • ' + (st.working || 0) + ' working days';
     if (statsEl) statsEl.innerHTML =
-      stat('This month', (st.percentage || 0) + '%', '📊', 'blue') +
-      stat('Present', st.present || 0, '✅', 'green') +
-      stat('Absent', st.absent || 0, '❌', 'red') +
-      stat('Leave', st.leave || 0, '🟡', 'yellow') +
-      stat('Late', st.late || 0, '🕔', 'blue');
+      stat('This month', (st.percentage || 0) + '%', 'chart-column', 'blue') +
+      stat('Present', st.present || 0, 'circle-check', 'green') +
+      stat('Absent', st.absent || 0, 'circle-x', 'red') +
+      stat('Leave', st.leave || 0, 'user', 'yellow') +
+      stat('Late', st.late || 0, 'clock', 'yellow');
     gridEl.innerHTML = calendarGrid(data.calendar);
     if (listEl){
       const rows = (data.history || []).slice(0, 20);
@@ -502,9 +545,9 @@ async function loadHomeworkView(){
     const due = rows.filter(r => r.status === 'Due soon' || r.status === 'Overdue').length;
     const over = rows.filter(r => r.status === 'Overdue').length;
     if (statsEl) statsEl.innerHTML =
-      stat('Total', rows.length, '📝', 'blue') +
-      stat('Due soon', due, '⏰', 'yellow') +
-      stat('Overdue', over, '⚠️', 'red');
+      stat('Total', rows.length, 'notebook-pen', 'blue') +
+      stat('Due soon', due, 'clock', 'yellow') +
+      stat('Overdue', over, 'triangle-alert', 'red');
     list.innerHTML = rows.length
       ? rows.map(homeworkItem).join('')
       : '<div class="card"><p class="muted">No homework has been assigned yet.</p></div>';
@@ -526,10 +569,10 @@ async function loadExamReport(){
     const ov = data.overall || {};
     if (sub) sub.textContent = (activeChildName() || '') + ' • ' + exams.length + ' exam(s) recorded';
     if (overall) overall.innerHTML =
-      stat('Overall %', (ov.percentage == null ? '—' : ov.percentage + '%'), '📊', 'blue') +
-      stat('Overall Grade', (ov.grade || '—'), '🏅', 'green') +
-      stat('Total Score', (ov.max_marks ? ov.obtained + '/' + ov.max_marks : '—'), '✅', 'green') +
-      stat('Exams', exams.length, '📋', 'blue');
+      stat('Overall %', (ov.percentage == null ? '—' : ov.percentage + '%'), 'chart-column', 'blue') +
+      stat('Overall Grade', (ov.grade || '—'), 'award', 'green') +
+      stat('Total Score', (ov.max_marks ? ov.obtained + '/' + ov.max_marks : '—'), 'target', 'green') +
+      stat('Exams', exams.length, 'clipboard-list', 'blue');
     list.innerHTML = exams.length ? exams.map(ex =>
       '<div class="card"><div class="card-head"><h3>' + esc(ex.exam_type) + '</h3>' +
       '<span class="grade-badge">' + esc(ex.grade) + '</span></div>' +
@@ -557,15 +600,18 @@ async function loadProfileView(){
     if (isStaff){
       const u = state.currentUser;
       host.innerHTML =
-        '<div class="card"><h3>👤 Account</h3>' +
+        '<div class="card"><div class="card-head"><h3>' + icon('user') + ' Account</h3></div>' +
         '<div class="pf-rows">' +
         '<div class="pf-row"><span>Username</span><b>' + esc(u.username) + '</b></div>' +
         '<div class="pf-row"><span>Role</span><b>' + esc(u.role) + '</b></div>' +
         '<div class="pf-row"><span>User ID</span><b>' + esc(u.id) + '</b></div>' +
         '</div><div class="pf-actions">' +
-        '<button class="btn-outline" onclick="navigate(\'password\')">🔑 Change Password</button>' +
-        '<button class="btn-ghost" onclick="logout()">↪ Logout</button></div></div>' +
-        '<div class="card"><h3>🏫 School</h3><div class="pf-rows">' +
+        '<button class="btn-outline" type="button" onclick="navigate(\'password\')">' +
+          icon('key-round') + ' Change Password</button>' +
+        '<button class="btn-ghost" type="button" onclick="logout()">' +
+          icon('log-out') + ' Logout</button></div></div>' +
+        '<div class="card"><div class="card-head"><h3>' + icon('building-2') + ' School</h3></div>' +
+        '<div class="pf-rows">' +
         '<div class="pf-row"><span>Session</span><b>2026–27</b></div>' +
         '<div class="pf-row"><span>Support</span><b>Contact the admin</b></div></div></div>';
       return;
@@ -576,12 +622,12 @@ async function loadProfileView(){
     host.innerHTML =
       '<div style="grid-column:1/-1">' + childSwitcher() + '</div>' +
       profileCard(data.student) +
-      '<div class="card"><h3>👨‍👩‍👧 Guardians</h3><div class="pf-rows">' +
+      '<div class="card"><div class="card-head"><h3>' + icon('users') + ' Guardians</h3></div><div class="pf-rows">' +
       (guardians.length ? guardians.map(g =>
         '<div class="pf-row"><span>' + esc(g.parent_id || 'Parent') + '</span><b>' +
         esc(g.name) + (g.phone ? ' • ' + esc(g.phone) : '') + '</b></div>').join('')
         : '<p class="muted">No guardian record on file.</p>') +
-      '</div><h4 style="margin-top:14px">🏫 School contact</h4><div class="pf-rows">' +
+      '</div><div class="card-head pf-sub">' + icon('building-2') + ' School contact</div><div class="pf-rows">' +
       '<div class="pf-row"><span>School</span><b>' + esc(sch.school_name) + '</b></div>' +
       '<div class="pf-row"><span>Address</span><b>' + esc(sch.address || '—') + '</b></div>' +
       '<div class="pf-row"><span>Contact</span><b>' + esc(sch.contact || '—') + '</b></div>' +

@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mobile viewport test harness — Dynamic CuroBase</title>
+<style>
+  :root{--frame-w:390px;--frame-h:844px}
+  *{box-sizing:border-box}
+  body{margin:0;background:#0f172a;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+       color:#e2e8f0;padding:18px;min-height:100vh}
+  header{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:center;margin-bottom:16px}
+  h1{font-size:15px;margin:0;font-weight:700;letter-spacing:.02em;width:100%;text-align:center;color:#93c5fd}
+  button{font:inherit;font-size:13px;padding:8px 14px;border-radius:999px;border:1px solid #334155;
+         background:#1e293b;color:#e2e8f0;cursor:pointer}
+  button.on{background:#2563eb;border-color:#2563eb;color:#fff}
+  .stage{display:flex;justify-content:center}
+  .frame{width:var(--frame-w);height:var(--frame-h);border:0;border-radius:34px;overflow:hidden;
+         background:#fff;box-shadow:0 30px 70px -30px rgba(0,0,0,.9);position:relative;
+         outline:8px solid #1e293b}
+  .meta{width:100%;text-align:center;font-size:12px;color:#94a3b8;margin-top:16px}
+  .meta b{color:#f8fafc}
+</style>
+</head>
+<body>
+<header>
+  <h1>Dynamic CuroBase — mobile viewport harness</h1>
+  <button data-w="360" >360 × 780</button>
+  <button data-w="390" class="on">390 × 844 (iPhone 14)</button>
+  <button data-w="414">414 × 896</button>
+  <button data-w="600">600 × 900</button>
+  <button id="reload">↻ Reload frame</button>
+</header>
+<div class="stage">
+  <iframe id="f" class="frame" title="Mobile app preview" src="/"></iframe>
+</div>
+<p class="meta">Currently <b id="w">390</b> px wide. The frame is an <b>iframe</b>, so the app sees a real
+390px viewport and all media queries apply exactly as on a phone.</p>
+<script>
+  var f=document.getElementById('f'), w=document.getElementById('w');
+  function setW(v){
+    document.documentElement.style.setProperty('--frame-w', v+'px');
+    var h = v>=600?900 : v>=414?896 : v>=390?844 : 780;
+    document.documentElement.style.setProperty('--frame-h', h+'px');
+    w.textContent=v;
+    [].forEach.call(document.querySelectorAll('button[data-w]'),function(b){
+      b.classList.toggle('on', b.dataset.w===String(v));
+    });
+    f.contentWindow.location.reload();
+  }
+  [].forEach.call(document.querySelectorAll('button[data-w]'),function(b){
+    b.onclick=function(){ setW(b.dataset.w); };
+  });
+  document.getElementById('reload').onclick=function(){ f.contentWindow.location.reload(); };
+</script>
+</body>
+</html>
