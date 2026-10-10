@@ -5,75 +5,182 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Smart Attendance for Modern Schools</title>
 <meta name="description" content="A secure, connected platform for attendance, students, teachers, parents and school administration.">
+<meta name="theme-color" content="#2563eb">
 <meta property="og:title" content="Smart Attendance for Modern Schools">
 <meta property="og:description" content="Secure, connected platform for attendance, students, teachers, parents and school administration.">
 <meta property="og:type" content="website">
 <link rel="stylesheet" href="style.css">
+<script src="icons.js"></script>
 <style>
-.public-hero{background:linear-gradient(135deg,#1E3A8A,#3b82f6);color:#fff;padding:48px 24px;text-align:center}
-.public-grid{max-width:1100px;margin:0 auto;padding:24px;display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
-.public-nav{position:sticky;top:0;background:#fff;border-bottom:1px solid #e5e7eb;padding:12px 24px;display:flex;gap:12px;align-items:center;z-index:10}
-.public-nav a{font-size:14px;color:#1E3A8A;text-decoration:none;font-weight:600}
+  /* Public page: same design tokens as the app, kept self-contained */
+  .public-nav{position:sticky;top:0;z-index:20;background:rgba(255,255,255,.94);
+    backdrop-filter:saturate(180%) blur(10px);border-bottom:1px solid var(--border);
+    padding:10px 16px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+  .public-nav b{display:flex;align-items:center;gap:8px;font-size:14.5px;color:var(--text)}
+  .public-nav b .ic{color:var(--blue)}
+  .public-nav a{font-size:13.5px;color:var(--muted);text-decoration:none;font-weight:600;
+    padding:6px 4px;border-radius:8px}
+  .public-nav a:hover{color:var(--blue)}
+  .public-hero{background:linear-gradient(135deg,#1E3A8A,#2563eb 55%,#3b82f6);color:#fff;
+    padding:52px 20px;text-align:center}
+  .public-hero h1{margin:0 0 8px;font-size:clamp(24px,5vw,36px);letter-spacing:-.02em;line-height:1.18}
+  .public-hero p{margin:0 auto;max-width:560px;color:#dbe7ff;font-size:15px;line-height:1.55}
+  .hero-actions{margin-top:20px;display:flex;gap:9px;justify-content:center;flex-wrap:wrap}
+  .hero-actions a{padding:11px 18px;border-radius:12px;font-weight:700;font-size:14px;
+    text-decoration:none;display:inline-flex;align-items:center;gap:7px;min-height:44px}
+  .hero-actions a.solid{background:#fff;color:#1E3A8A}
+  .hero-actions a.ghost{border:1px solid rgba(255,255,255,.55);color:#fff}
+  .public-grid{max-width:1080px;margin:0 auto;padding:20px 16px;display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px}
+  .public-grid>section,.public-grid>.wide{grid-column:1/-1}
+  .public-grid h2{display:flex;align-items:center;gap:9px;font-size:18px;margin:0 0 4px}
+  .public-grid h2 .ic{color:var(--blue)}
+  .feat{display:flex;gap:12px;align-items:flex-start}
+  .feat .ic{width:22px;height:22px;color:var(--blue);flex:none;margin-top:1px}
+  .feat h3{margin:0 0 4px;font-size:14.5px}
+  .feat p{margin:0;font-size:13.5px;line-height:1.5}
+  .pub-list{display:grid;gap:8px}
+  .pub-row{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid var(--border);
+    border-radius:12px;background:var(--bg)}
+  .pub-row .ic{width:17px;height:17px;color:var(--blue);flex:none;margin-top:2px}
+  .pub-row b{font-size:14px;display:block}
+  .pub-row small{color:var(--muted);font-size:12px}
+  .pub-row p{margin:4px 0 0;font-size:13.5px;color:var(--muted);line-height:1.5}
+  .pub-foot{text-align:center;padding:26px 16px;color:var(--muted);font-size:13px}
+  .pub-foot .tagline{font-weight:700;color:var(--text);margin-bottom:6px;font-size:13.5px}
+  .contact-form{margin-top:14px;display:grid;gap:10px;max-width:420px}
+  .contact-form label{font-size:13px;font-weight:600;display:grid;gap:5px}
+  .contact-form input,.contact-form textarea{padding:10px 12px;border:1px solid var(--border);
+    border-radius:11px;font-size:14px;font-family:inherit;background:var(--card);color:var(--text);width:100%}
+  .contact-form input:focus,.contact-form textarea:focus{outline:none;border-color:var(--blue)}
 </style>
 </head>
 <body>
 <nav class="public-nav" aria-label="Public navigation">
-  <b id="pubSchool">🏫 Smart Attendance</b>
-  <a href="#home">Home</a><a href="#about">About</a><a href="#features">Features</a><a href="#notices">Notices</a><a href="#events">Events</a><a href="#contact">Contact</a>
+  <b id="pubSchool"><i data-icon="graduation-cap"></i> <span>Smart Attendance</span></b>
+  <a href="#home">Home</a><a href="#about">About</a><a href="#features">Features</a>
+  <a href="#notices">Notices</a><a href="#events">Events</a><a href="#contact">Contact</a>
   <span style="margin-left:auto"></span>
-  <a href="/" style="background:#1E3A8A;color:#fff;padding:8px 14px;border-radius:8px">Login</a>
+  <a href="/" class="btn-primary" style="min-height:38px;padding:8px 15px">
+    <i data-icon="arrow-right"></i> Login</a>
 </nav>
+
 <header id="home" class="public-hero">
   <h1>Smart Attendance for Modern Schools</h1>
   <p>A secure, connected platform for attendance, students, teachers, parents and school administration.</p>
-  <div style="margin-top:16px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
-    <a href="/" style="background:#fff;color:#1E3A8A;padding:10px 18px;border-radius:10px;font-weight:700;text-decoration:none">Login</a>
-    <a href="#features" style="border:1px solid #fff;color:#fff;padding:10px 18px;border-radius:10px;text-decoration:none">Explore Features</a>
-    <a href="#contact" style="border:1px solid #fff;color:#fff;padding:10px 18px;border-radius:10px;text-decoration:none">Contact School</a>
+  <div class="hero-actions">
+    <a href="/" class="solid"><i data-icon="arrow-right"></i> Login</a>
+    <a href="#features" class="ghost"><i data-icon="zap"></i> Explore Features</a>
+    <a href="#contact" class="ghost"><i data-icon="phone"></i> Contact School</a>
   </div>
 </header>
+
 <main>
-<section id="about" class="public-grid"><div class="card" style="grid-column:1/-1"><h2>About School</h2><div id="aboutBody" class="muted">Loading...</div></div></section>
-<section id="features" class="public-grid">
-  <div class="card"><h3>✅ Smart Attendance</h3><p class="muted">Session, subject & time tracking with Late support.</p></div>
-  <div class="card"><h3>🔳 QR Attendance</h3><p class="muted">Expiring class-scoped QR codes, server-validated.</p></div>
-  <div class="card"><h3>📊 Analytics</h3><p class="muted">Trends, heatmap, insights from real data.</p></div>
-  <div class="card"><h3>👨‍👩‍👧 Parent Portal</h3><p class="muted">Child snapshot, alerts, review requests.</p></div>
-  <div class="card"><h3>🪪 Digital ID</h3><p class="muted">QR contains ID only — no personal data.</p></div>
-  <div class="card"><h3>📡 Offline Mode</h3><p class="muted">Queue locally, sync safely, no duplicates.</p></div>
-</section>
-<section id="notices" class="public-grid"><div class="card" style="grid-column:1/-1"><h2>📢 Public Notices</h2><div id="pubNotices">Loading...</div></div></section>
-<section id="events" class="public-grid"><div class="card" style="grid-column:1/-1"><h2>📅 Events & Holidays</h2><div id="pubEvents">Loading...</div></div></section>
-<section id="contact" class="public-grid"><div class="card" style="grid-column:1/-1"><h2>Contact</h2><div id="contactInfo" class="muted"></div>
-<form id="contactForm" style="margin-top:12px;display:grid;gap:8px;max-width:420px">
-<label>Name*<input id="cName" required style="width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:8px"></label>
-<label>Email<input id="cEmail" style="width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:8px"></label>
-<label>Message*<textarea id="cMsg" required style="width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:8px"></textarea></label>
-<button class="btn-primary" type="submit">Send</button><span id="cOk" class="muted"></span>
-</form></div></section>
+  <section id="about" class="public-grid">
+    <div class="card wide">
+      <h2><i data-icon="building-2"></i> About School</h2>
+      <div id="aboutBody" class="muted">Loading…</div>
+    </div>
+  </section>
+
+  <section id="features" class="public-grid">
+    <div class="card"><div class="feat"><i data-icon="clipboard-check"></i>
+      <div><h3>Smart Attendance</h3><p class="muted">Session, subject &amp; time tracking with Late support.</p></div>
+    </div></div>
+    <div class="card"><div class="feat"><i data-icon="qr-code"></i>
+      <div><h3>QR Attendance</h3><p class="muted">Expiring class-scoped QR codes, server-validated.</p></div>
+    </div></div>
+    <div class="card"><div class="feat"><i data-icon="chart-column"></i>
+      <div><h3>Analytics</h3><p class="muted">Trends, heatmap, insights from real data.</p></div>
+    </div></div>
+    <div class="card"><div class="feat"><i data-icon="users"></i>
+      <div><h3>Parent Portal</h3><p class="muted">Child snapshot, alerts, review requests.</p></div>
+    </div></div>
+    <div class="card"><div class="feat"><i data-icon="badge-check"></i>
+      <div><h3>Digital ID</h3><p class="muted">QR contains ID only — no personal data.</p></div>
+    </div></div>
+    <div class="card"><div class="feat"><i data-icon="wifi-off"></i>
+      <div><h3>Offline Mode</h3><p class="muted">Queue locally, sync safely, no duplicates.</p></div>
+    </div></div>
+  </section>
+
+  <section id="notices" class="public-grid">
+    <div class="card wide">
+      <h2><i data-icon="megaphone"></i> Public Notices</h2>
+      <div id="pubNotices" class="pub-list">Loading…</div>
+    </div>
+  </section>
+
+  <section id="events" class="public-grid">
+    <div class="card wide">
+      <h2><i data-icon="calendar-days"></i> Events &amp; Holidays</h2>
+      <div id="pubEvents" class="pub-list">Loading…</div>
+    </div>
+  </section>
+
+  <section id="contact" class="public-grid">
+    <div class="card wide">
+      <h2><i data-icon="phone"></i> Contact</h2>
+      <div id="contactInfo" class="muted"></div>
+      <form id="contactForm" class="contact-form">
+        <label>Name*<input id="cName" required autocomplete="name"></label>
+        <label>Email<input id="cEmail" type="email" autocomplete="email"></label>
+        <label>Message*<textarea id="cMsg" required rows="4"></textarea></label>
+        <button class="btn-primary" type="submit"><i data-icon="send"></i> Send</button>
+        <span id="cOk" class="muted"></span>
+      </form>
+    </div>
+  </section>
 </main>
-<footer style="text-align:center;padding:24px" class="muted"><small>© Smart Attendance • Privacy • Terms • No private student data on this page</small></footer>
+
+<footer class="pub-foot">
+  <div class="tagline">Smarter Attendance · Better Learning · Brighter Future</div>
+  <small>© Smart Attendance · Privacy · Terms · No private student data on this page</small>
+</footer>
+
 <script>
+function pubRow(ic, title, meta, body){
+  return '<div class="pub-row"><i data-icon="'+ic+'"></i><div><b>'+title+'</b>' +
+         (meta?'<small>'+meta+'</small>':'')+(body?'<p>'+body+'</p>':'')+'</div></div>';
+}
 async function load(){
   try{
     const info=await fetch('/api/public/info').then(r=>r.json());
-    document.getElementById('pubSchool').textContent='🏫 '+(info.school_name||'Smart Attendance');
-    document.getElementById('aboutBody').innerHTML=`<b>${info.school_name||''}</b><br>${info.address||''}<br>${info.contact||''}`;
+    document.querySelector('#pubSchool span').textContent=info.school_name||'Smart Attendance';
+    document.getElementById('aboutBody').innerHTML='<b>'+(info.school_name||'')+'</b><br>' +
+      (info.address||'')+'<br>'+(info.contact||'');
     document.getElementById('contactInfo').textContent=(info.address||'')+' • '+(info.contact||'');
   }catch(e){}
   try{
     const n=await fetch('/api/public/notices').then(r=>r.json());
-    document.getElementById('pubNotices').innerHTML=n.length? n.map(x=>`<div style="padding:8px;border-bottom:1px solid #f1f5f9"><b>📢 ${x.title}</b> <small>${x.date||''}</small><p>${x.content||''}</p></div>`).join('') : 'No notices.';
+    document.getElementById('pubNotices').innerHTML = (n&&n.length)
+      ? n.map(x=>pubRow('bell', x.title, x.date||'', x.content||'')).join('')
+      : '<div class="inline-empty">No notices yet.</div>';
   }catch(e){}
   try{
     const ev=await fetch('/api/public/events').then(r=>r.json());
-    document.getElementById('pubEvents').innerHTML=`<h4>Holidays</h4>`+(ev.holidays||[]).map(h=>`<div>📅 ${h.title} — ${h.date}</div>`).join('')+`<h4>Exams</h4>`+(ev.exams||[]).map(x=>`<div>📝 ${x.title} — ${x.date}</div>`).join('');
+    const hol=(ev.holidays||[]).map(h=>pubRow('calendar', h.title, h.date)).join('');
+    const ex=(ev.exams||[]).map(x=>pubRow('file-text', x.title, x.date)).join('');
+    document.getElementById('pubEvents').innerHTML =
+      '<h3 style="margin:2px 0 6px;font-size:14px">Holidays</h3>'+(hol||'<div class="inline-empty">None scheduled.</div>')+
+      '<h3 style="margin:12px 0 6px;font-size:14px">Exams</h3>'+(ex||'<div class="inline-empty">None scheduled.</div>');
   }catch(e){}
+  if(window.paintIcons) paintIcons(document);
 }
 document.getElementById('contactForm').addEventListener('submit', async (e)=>{
   e.preventDefault();
-  const r=await fetch('/api/public/contact',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:document.getElementById('cName').value,email:document.getElementById('cEmail').value,message:document.getElementById('cMsg').value})});
-  document.getElementById('cOk').textContent=r.ok?'Sent ✅':'Failed';
+  const btn=e.target.querySelector('button');
+  try{
+    btn.disabled=true;
+    const r=await fetch('/api/public/contact',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({name:document.getElementById('cName').value,
+                           email:document.getElementById('cEmail').value,
+                           message:document.getElementById('cMsg').value})});
+    document.getElementById('cOk').textContent=r.ok?'Sent — the school will reply soon.':'Could not send. Please try again.';
+    if(r.ok) e.target.reset();
+  }catch(err){
+    document.getElementById('cOk').textContent='Network error. Please try again.';
+  }finally{ btn.disabled=false; if(window.paintIcons) paintIcons(document); }
 });
 load();
 </script>
