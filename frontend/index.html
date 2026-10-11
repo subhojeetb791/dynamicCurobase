@@ -72,7 +72,10 @@
       </div>
       <div class="login-row"><label class="check"><input type="checkbox" id="rememberMe" checked> Remember Me</label><a href="#" onclick="forgotPassword('staff');return false">Forgot Password?</a></div>
       <button id="loginBtn" type="submit" class="btn-primary btn-block">Login <i data-icon="arrow-right"></i></button>
-      <p class="login-hint">Demo: <b>admin/admin123</b> | <b>teacher/teacher123</b></p>
+      <!-- The demo hint that used to sit here printed a working admin
+           username and password on the public login screen, and the same
+           pair is the live production password. Credentials are handed out
+           out-of-band; they are never rendered into the page. -->
       <p id="loginMsg" class="login-msg" role="alert"></p>
       <div class="login-alt-links">
         <a href="#" onclick="showLoginCard('student');return false;"><i data-icon="graduation-cap"></i> Student Login</a>
