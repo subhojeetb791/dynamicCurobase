@@ -158,12 +158,22 @@ those are pre-existing tables the module only reads.
 
 1. Deploy as usual — `render.yaml`, `wsgi.py` and the start scripts are unchanged.
 2. The migration runs automatically on first boot. Nothing manual is required.
-3. In **Timetable → Settings**, set the school opening/closing time, timezone and working days.
-4. **Link staff accounts.** A teacher's "My Timetable" resolves through `teachers.user_id`, which is
+3. Confirm the health check: `GET /api/health` must answer `200` with
+   `{"success":true,"status":"ok","database":"connected"}` **without a session**, or
+   `render.yaml`'s `healthCheckPath` can never pass. It previously returned 401 because
+   it sits behind the default-deny `/api/*` guard, so it has been added to
+   `PUBLIC_API_GET`. The route exposes only ok/status and database connectivity —
+   no school, student or schedule data.
+4. In **Timetable → Settings**, set the school opening/closing time, timezone and working days.
+5. **Link staff accounts.** A teacher's "My Timetable" resolves through `teachers.user_id`, which is
    not populated by the seed. An admin can link it in the Teachers screen
    (`PUT /api/teachers/<id>` with `user_id`). An account may only be linked to a staff record whose
    role is `teacher`, and one account cannot be linked twice.
-5. Build each class's week in **Timetable → Edit**, then **Publish** with an effective date.
+6. Build each class's week in **Timetable → Edit**, then **Publish** with an effective date.
+
+Returning users get the new assets straight away: the service worker is network-first with a
+cache fallback, and its cache key was bumped `dynamic-curo-v4` → `dynamic-curo-v5` so the
+previous `index.html` / `app.js` / `style.css` entries are purged on activate.
 
 ### Notifications — what is actually sent
 
@@ -209,15 +219,23 @@ The `whatsapp_groups` table stores group *links* only — it is not a sending se
 | `test_timetable.py` (new) | **96 / 96** |
 | `test_attendance.py` (regression) | **42 / 42** |
 | `test_rbac.py` (regression) | all expectations pass |
-| `check_live_tt.py` (live HTTP) | **28 / 28** |
+| `check_live_tt.py` vs production | **29 / 29** |
+| `check_live.py` vs production | **25 / 25** |
+| `check_live_public.py` vs production | **6 / 6** |
 | `jscheck.py` (JS tokenizer) | `app.js`, `portal.js`, `icons.js` OK |
+| `py_compile app.py` | clean |
 
+Verified against the deployed build at `https://dynamiccuro.onrender.com` — not just locally.
 The timetable suite covers settings validation, version CRUD, every conflict code, the
 "nothing is written on conflict" guarantee, publish + double-publish refusal, published-version
 immutability, day/week/class duplication (including staff-clearing and `keep_teachers` clashes),
 change history, substitutions (weekday match, distinct substitute, duplicates, reject/delete,
 approved-only visibility), PDF magic bytes, and the role matrix — student/parent IDOR scoping,
 teacher class restriction, unlinked-teacher behaviour, and anonymous 401s.
+
+`check_live_tt.py` additionally proves the production page carries the new view and grid CSS,
+every static asset loads, the timetable routes exist and are auth-gated, the PDF is a real PDF,
+and `/api/health` answers `200` unauthenticated.
 
 ### Known limitations
 
