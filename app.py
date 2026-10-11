@@ -1145,6 +1145,9 @@ PUBLIC_API_GET = (
     '/api/roles',
     '/api/exam_types',
     '/api/qr/image',
+    '/api/health',        # render.yaml healthCheckPath: must answer without a
+                          # session or the hosting platform can never pass it.
+                          # Returns only ok/status + database connectivity.
 )
 
 @app.before_request
