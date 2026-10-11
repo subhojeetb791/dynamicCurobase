@@ -63,12 +63,12 @@
         <label for="loginUser">Username *</label>
         <div class="input-wrap">
           <span class="lead"><i data-icon="user"></i></span>
-          <input id="loginUser" placeholder="e.g. admin" value="admin" required autocomplete="username">
+          <input id="loginUser" placeholder="e.g. admin" required autocomplete="username">
         </div>
       </div>
       <div class="field">
         <label for="loginPass">Password *</label>
-        <div class="pwd-wrap"><input id="loginPass" type="password" placeholder="••••••••" value="admin123" required autocomplete="current-password"><button type="button" onclick="togglePwd()" tabindex="-1" aria-label="Show or hide password"><i data-icon="eye"></i></button></div>
+        <div class="pwd-wrap"><input id="loginPass" type="password" placeholder="••••••••" required autocomplete="current-password"><button type="button" onclick="togglePwd()" tabindex="-1" aria-label="Show or hide password"><i data-icon="eye"></i></button></div>
       </div>
       <div class="login-row"><label class="check"><input type="checkbox" id="rememberMe" checked> Remember Me</label><a href="#" onclick="forgotPassword('staff');return false">Forgot Password?</a></div>
       <button id="loginBtn" type="submit" class="btn-primary btn-block">Login <i data-icon="arrow-right"></i></button>
@@ -1070,7 +1070,7 @@
           </div>
           <div class="field">
             <label for="epBio">Bio <small class="muted">(280 characters max)</small></label>
-            <textarea id="epBio" rows="3" maxlength="280" placeholder="A line or two about you"></textarea>
+            <textarea id="epBio" rows="3" maxlength="280" placeholder="A line or two about you" oninput="epCount()"></textarea>
             <p class="muted sm"><span id="epBioCount">0</span>/280</p>
             <p class="field-err" id="err-epBio" role="alert"></p>
           </div>

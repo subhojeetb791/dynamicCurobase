@@ -1,5 +1,5 @@
 import os, sqlite3, hashlib, hmac, secrets, datetime, json, io, base64, re, functools, unicodedata
-from flask import Flask, request, jsonify, send_from_directory, g, send_file, session
+from flask import Flask, request, jsonify, send_from_directory, g, send_file, session, abort
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 
@@ -1184,6 +1184,10 @@ PUBLIC_API_ANY = (
     '/api/auth/verify-email',
     '/api/auth/forgot-password',
     '/api/auth/reset-password',
+    # The public site's contact form (frontend/public.html) posts here before
+    # any session exists. It only ever writes an anonymous row into complaints
+    # and answers {"ok":true}, and it is rate-limited per IP below.
+    '/api/public/',
 )
 PUBLIC_API_GET = (
     '/api/settings',      # school name + logo shown on the login screens
@@ -1292,13 +1296,68 @@ def upload_logo():
     get_db().commit()
     return jsonify({"ok":True, "logo": fn})
 
+# --- public image files ---------------------------------------------------
+# send_from_directory() blocks '../' traversal, but that alone is NOT enough
+# here: the live SQLite database physically lives inside DATA_DIR, the very
+# directory these routes serve. send_from_directory does not filter filenames,
+# so GET /data/attendance.db used to hand the entire school database to any
+# anonymous visitor - every PBKDF2 password hash, every student's personal
+# record, every attendance mark, every reset-token hash. /api/logo/attendance.db
+# served it too, because that route sits in PUBLIC_API_GET for the login screen.
+# An explicit allowlist of what may be public is therefore checked BEFORE
+# anything touches disk: only plainly-named image files, at the top level.
+_PUBLIC_FILE_RE = re.compile(
+    r'^[A-Za-z0-9][A-Za-z0-9._-]*\.(?:png|jpe?g|webp|gif|ico|svg)$', re.I)
+
+def _public_image(directory, fn):
+    """Serve one image file from *directory*, or 404.
+
+    The basename is taken first so no path separator - forward or backward,
+    and on Windows os.path.join() treats '\\' as a separator too - can ever
+    reach the filesystem. Anything that is not a plainly-named image (the
+    database, .env, backups, Python sources, anything inside a
+    sub-directory such as qrcodes/) is a 404. QR codes are deliberately
+    excluded: they carry live attendance-scanning tokens and must stay
+    behind authentication.
+    """
+    fn = os.path.basename((fn or '').replace('\\', '/'))
+    if not fn or not _PUBLIC_FILE_RE.match(fn):
+        abort(404)
+    full = os.path.join(directory, fn)
+    if not os.path.isfile(full):
+        abort(404)
+    return send_file(full, conditional=True)
+
+_SAFE_ID_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$')
+
+def _safe_id_for_file(sid):
+    """Validate a student_id before it is used to build a file path.
+
+    Photo and QR file names are built as ``f"{sid}..."`` and then handed to
+    ``os.path.join()``. Werkzeug's default ``<sid>`` converter excludes '/'
+    but not '\\', and on Windows ``os.path.join()`` treats '\\' as a
+    separator - so ``..%5Cschool_logo`` escaped ``data/qrcodes`` and read
+    ``data/school_logo.png`` (confirmed: HTTP 200 with real PNG bytes). The
+    same value was also used to *write* newly generated QR codes outside the
+    directory. Returns the cleaned id, or None when it is not a plain
+    identifier - callers must treat None as a 400/404.
+    """
+    s = (sid or '').strip()
+    if not _SAFE_ID_RE.match(s) or '..' in s:
+        return None
+    return s
+
 @app.route('/api/logo/<path:fn>')
 def serve_logo(fn):
-    return send_from_directory(DATA_DIR, fn)
+    # School logo only - shown on the login screens before any session exists.
+    return _public_image(DATA_DIR, fn)
 
 @app.route('/data/<path:fn>')
 def serve_data(fn):
-    return send_from_directory(DATA_DIR, fn)
+    # Legacy path kept so old links still resolve. Nothing in this codebase
+    # references it any more; it is narrowed to the same image allowlist so it
+    # can never serve the database again.
+    return _public_image(DATA_DIR, fn)
 
 # ---------- Classes & Sections ----------
 @app.route('/api/classes', methods=['GET','POST','DELETE'])
@@ -1339,7 +1398,7 @@ def sections_api():
     if not u or not can(u['role'], "classes", "full"):
         return jsonify({"error":"Access denied: Admin only"}),403
     if request.method=='POST':
-        d=request.get_json()
+        d=request.get_json() or {}
         name=(d.get('name') or '').strip().upper()
         # Enforce A-K only
         if name not in list("ABCDEFGHIJK"):
@@ -1423,8 +1482,15 @@ def students_api():
         else:
             d=request.get_json() or {}
             photo=None
-        sid=d.get('student_id','').strip()
+        sid=(d.get('student_id') or '').strip()
         if not sid: return jsonify({"error":"Student ID required"}),400
+        # sid becomes the photo file name AND the QR file name below, both
+        # joined straight onto a directory - so a value containing a path
+        # separator (Werkzeug's JSON body has no such restriction, and on
+        # Windows '\\' is a separator to os.path.join) would write outside
+        # data/photos and data/qrcodes. Require a plain identifier.
+        if not _safe_id_for_file(sid):
+            return jsonify({"error":"Invalid Student ID: use letters, digits, dot, dash or underscore only"}),400
         if db.execute("SELECT id FROM students WHERE student_id=?", (sid,)).fetchone():
             return jsonify({"error":"Duplicate Student ID"}),400
         photo_name=""
@@ -1502,14 +1568,20 @@ def students_api():
 
 @app.route('/api/students/<sid>/qr')
 def qr_api(sid):
-    # sid is student_id string
+    # sid is student_id string. It is used verbatim to build a filesystem
+    # path, so it must be a plain identifier - see _safe_id_for_file().
+    sid = _safe_id_for_file(sid)
+    if not sid:
+        abort(404)
     path=os.path.join(QR_DIR, f"{sid}.png")
     if not os.path.exists(path):
         try:
             import qrcode
             img=qrcode.make(sid)
             img.save(path)
-        except:
+        except Exception:
+            # a bare `except:` hid the real failure; surface it in the log
+            app.logger.exception("QR generation failed for %s", sid)
             return jsonify({"error":"QR generation failed"}),500
     return send_file(path, mimetype='image/png')
 
@@ -1517,12 +1589,20 @@ def qr_api(sid):
 def photo_api(fn):
     # Profile photos may sit on a persistent disk (PROFILE_UPLOAD_DIR) while
     # student photos stay in data/photos; serve whichever directory holds it.
-    # <fn> is a single path segment and send_from_directory rejects traversal.
+    # _public_image() takes the basename first: Werkzeug's <fn> converter only
+    # excludes '/', so on Windows a '%5C' (backslash) in the URL used to reach
+    # os.path.join() as a separator and escape the directory.
+    fn = os.path.basename((fn or '').replace('\\', '/'))
+    if not fn or not _PUBLIC_FILE_RE.match(fn):
+        abort(404)
     if PROFILE_UPLOAD_DIR != PHOTO_DIR:
         alt = os.path.join(PROFILE_UPLOAD_DIR, fn)
         if os.path.isfile(alt):
-            return send_from_directory(PROFILE_UPLOAD_DIR, fn)
-    return send_from_directory(PHOTO_DIR, fn)
+            return send_file(alt, conditional=True)
+    full = os.path.join(PHOTO_DIR, fn)
+    if not os.path.isfile(full):
+        abort(404)
+    return send_file(full, conditional=True)
 
 # ---------- Attendance ----------
 @app.route('/api/attendance', methods=['GET','POST'])
@@ -1650,16 +1730,26 @@ def scan_attendance():
     u=get_current_user()
     if not u or not can(u['role'], "attendance", "add"):
         return jsonify({"error":"Access denied: cannot scan attendance"}),403
-    d=request.get_json()
-    student_code=d.get('code','').strip() # student_id string
-    status=d.get('status','P')
+    d=request.get_json() or {}
+    student_code=(d.get('code') or '').strip() # student_id string
+    status=(d.get('status') or 'P').upper()
     date=d.get('date') or datetime.date.today().isoformat()
+    if status not in ('P','A','L','T'):
+        return jsonify({"error":f"Invalid status {status}. Use P/A/L/T"}),400
     if is_holiday(date):
         return jsonify({"error":"Holiday - attendance blocked"}),400
     db=get_db()
     row=db.execute("SELECT id FROM students WHERE student_id=?", (student_code,)).fetchone()
     if not row: return jsonify({"error":"Student not found"}),404
-    db.execute("INSERT OR REPLACE INTO attendance (student_id,date,status) VALUES (?,?,?)", (row[0], date, status))
+    # Idempotent write (same pattern as the bulk endpoint above): the daily
+    # slot has subject_id NULL, and SQLite treats NULL as distinct inside
+    # UNIQUE(student_id,date,subject_id), so INSERT OR REPLACE never replaced
+    # anything - scanning the same student twice stacked duplicate rows with
+    # conflicting statuses that the roster then listed twice. Clear the slot
+    # first so a repeat scan updates rather than duplicates.
+    db.execute("DELETE FROM attendance WHERE student_id=? AND date=? AND (subject_id IS NULL OR subject_id='')",
+               (row[0], date))
+    db.execute("INSERT INTO attendance (student_id,date,status) VALUES (?,?,?)", (row[0], date, status))
     db.commit()
     return jsonify({"ok":True, "student_id": student_code})
 
@@ -1758,11 +1848,34 @@ def status_counts(db, date=None, month=None, class_id=None, section_id=None,
     rows = db.execute(sql, head_params + tail_params).fetchall()
     return {r['status']: r['c'] for r in rows}
 
+def _valid_month(month, default=None):
+    """Validate a user-supplied 'YYYY-MM' query parameter.
+
+    Returns the normalised string, *default* when the parameter is absent, or
+    None when it is malformed. Every caller previously did
+    ``y,m = month.split('-')`` straight off ``request.args``: '2026' unpacks to
+    one value, '2026-10-11' to three, '2026-13' fails ``monthrange`` and 'abc'
+    fails ``int()`` - each an uncaught ValueError that surfaced as HTTP 500
+    instead of a 400.
+    """
+    if not month:
+        return default
+    p = str(month).split('-')
+    if len(p) != 2:
+        return None
+    try:
+        y, m = int(p[0]), int(p[1])
+    except ValueError:
+        return None
+    if not (1 <= m <= 12 and 1 <= y <= 9999):
+        return None
+    return "%04d-%02d" % (y, m)
+
 # ---------- Attendance Calendar (monthly day-wise) ----------
 @app.route('/api/calendar')
 def calendar_api():
     db=get_db()
-    month=request.args.get('month')  # YYYY-MM
+    month=_valid_month(request.args.get('month'))  # YYYY-MM
     class_id=request.args.get('class_id')
     section_id=request.args.get('section_id')
     if not month: return jsonify({"error":"month required YYYY-MM"}),400
@@ -1910,7 +2023,7 @@ def holidays_api():
         rows=db.execute("SELECT * FROM holidays ORDER BY date").fetchall()
         return jsonify([dict(r) for r in rows])
     if request.method=='POST':
-        d=request.get_json()
+        d=request.get_json() or {}
         db.execute("INSERT OR REPLACE INTO holidays (date,name,type) VALUES (?,?,?)", (d['date'], d['name'], d.get('type','Custom')))
         db.commit()
         return jsonify({"ok":True})
@@ -1933,7 +2046,7 @@ def subjects_api():
     if request.method=='GET':
         return jsonify([dict(r) for r in db.execute("SELECT * FROM subjects ORDER BY name").fetchall()])
     if request.method=='POST':
-        name=request.get_json().get('name','').strip()
+        name=(request.get_json() or {}).get('name','').strip()
         if not name: return jsonify({"error":"name required"}),400
         try:
             db.execute("INSERT INTO subjects (name) VALUES (?)", (name,))
@@ -2035,7 +2148,7 @@ def monthly_api():
     if not u:
         return jsonify({"error":"Not authenticated"}), 401
     db=get_db()
-    month=request.args.get('month') # YYYY-MM
+    month=_valid_month(request.args.get('month')) # YYYY-MM
     class_id=request.args.get('class_id')
     section_id=request.args.get('section_id')
     if not month: return jsonify({"error":"month required YYYY-MM"}),400
@@ -2088,7 +2201,11 @@ def export_monthly_excel():
     hit=_check_api_rate("reports")
     if hit: return hit
     # heavy report -> background-friendly: paginate students (limit 500)
-    month=request.args.get('month')
+    month=_valid_month(request.args.get('month'))
+    if not month:
+        # month may be absent entirely; the old code called None.split('-'),
+        # which was an AttributeError -> HTTP 500 rather than a 400.
+        return jsonify({"error":"month required YYYY-MM"}),400
     class_id=request.args.get('class_id')
     section_id=request.args.get('section_id')
     # reuse logic
@@ -2130,7 +2247,11 @@ def export_monthly_excel():
 
 @app.route('/api/export/monthly/pdf')
 def export_monthly_pdf():
-    month=request.args.get('month')
+    month=_valid_month(request.args.get('month'))
+    if not month:
+        # month may be absent entirely; the old code called None.split('-'),
+        # which was an AttributeError -> HTTP 500 rather than a 400.
+        return jsonify({"error":"month required YYYY-MM"}),400
     db=get_db()
     y,m=month.split('-')
     import calendar
@@ -3336,7 +3457,7 @@ def staff_api():
     if request.method=='GET':
         return jsonify([dict(r) for r in db.execute("SELECT * FROM staff ORDER BY id DESC").fetchall()])
     if request.method=='POST':
-        d=request.get_json()
+        d=request.get_json() or {}
         db.execute("INSERT INTO staff (name,role,phone) VALUES (?,?,?)", (d['name'], d['role'], d.get('phone')))
         db.commit()
         return jsonify({"ok":True})
@@ -3352,9 +3473,16 @@ def teachers_api():
     u=get_current_user()
     if request.method=='GET':
         if not u or not can(u['role'], "teachers", "view"):
-            # students/parents cannot view teachers list per matrix
+            # RBAC["teachers"] is {"admin":"full", "teacher":"none",
+            # "student":"none", "parent":"none"} and can() returns False for
+            # "none". This guard only returned [] for student/parent, so a
+            # TEACHER satisfied the outer condition but not the inner one and
+            # fell straight through to the SELECT - receiving the entire
+            # staff table (phone, email, user_id) the matrix denies them.
+            # Students/parents keep the empty list the portal expects.
             if u and u['role'] in ('student','parent'):
                 return jsonify([]), 200
+            return jsonify({"error":"Access denied"}),403
         return jsonify([dict(r) for r in db.execute("SELECT * FROM teachers ORDER BY id DESC").fetchall()])
     if not u or not can(u['role'], "teachers", "full"):
         return jsonify({"error":"Access denied: Admin only"}),403
@@ -3434,11 +3562,15 @@ def parents_api():
             # teacher cannot view parents
             if u and u['role']=='teacher':
                 return jsonify([]), 200
-        return jsonify([dict(r) for r in db.execute("SELECT p.*, s.name as student_name FROM parents p LEFT JOIN students s ON s.id=p.student_id ORDER BY p.id DESC").fetchall()])
+        # Explicit column list rather than p.*: the table gained a
+        # password_hash column, which SELECT p.* was serialising straight into
+        # the JSON response. No endpoint should ever return a password hash,
+        # even to an admin.
+        return jsonify([dict(r) for r in db.execute("SELECT p.id,p.name,p.phone,p.email,p.student_id,p.user_id,p.school_id,p.parent_id,s.name as student_name FROM parents p LEFT JOIN students s ON s.id=p.student_id ORDER BY p.id DESC").fetchall()])
     if not u or not can(u['role'], "parents", "full"):
         return jsonify({"error":"Access denied: Admin only"}),403
     if request.method=='POST':
-        d=request.get_json()
+        d=request.get_json() or {}
         # validate student exists if provided
         if d.get('student_id') and not db.execute("SELECT id FROM students WHERE id=?", (d.get('student_id'),)).fetchone():
             return jsonify({"error":"Invalid student_id"}),400
@@ -3472,7 +3604,7 @@ def messages_api():
     if u['role']=='parent':
         return jsonify({"error":"Access denied: cannot send messages"}),403
     if request.method=='POST':
-        d=request.get_json()
+        d=request.get_json() or {}
         if not d.get('content'): return jsonify({"error":"content required"}),400
         # student can only send if permitted (for now allow but limited)
         db.execute("INSERT INTO messages (sender_id, receiver_id, content, date) VALUES (?,?,?,?)",
@@ -3496,7 +3628,7 @@ def notices_api():
     if request.method=='GET':
         return jsonify([dict(r) for r in db.execute("SELECT * FROM notices ORDER BY id DESC").fetchall()])
     if request.method=='POST':
-        d=request.get_json()
+        d=request.get_json() or {}
         db.execute("INSERT INTO notices (title,content,date) VALUES (?,?,?)", (d['title'], d['content'], datetime.date.today().isoformat()))
         db.commit()
         return jsonify({"ok":True})
@@ -3515,7 +3647,7 @@ def enotes_api():
     if request.method=='GET':
         return jsonify([dict(r) for r in db.execute("SELECT * FROM enotes ORDER BY id DESC").fetchall()])
     if request.method=='POST':
-        d=request.get_json()
+        d=request.get_json() or {}
         db.execute("INSERT INTO enotes (title,subject,content,date) VALUES (?,?,?,?)", (d['title'], d.get('subject'), d.get('content'), datetime.date.today().isoformat()))
         db.commit()
         return jsonify({"ok":True})
@@ -3534,7 +3666,7 @@ def meals_api():
     if request.method=='GET':
         return jsonify([dict(r) for r in db.execute("SELECT * FROM midday_meals ORDER BY date DESC").fetchall()])
     if request.method=='POST':
-        d=request.get_json()
+        d=request.get_json() or {}
         if d.get('class_id') and not db.execute("SELECT id FROM classes WHERE id=?", (d.get('class_id'),)).fetchone():
             return jsonify({"error":"Invalid class_id"}),400
         try:
@@ -3559,7 +3691,7 @@ def scholarships_api():
         rows=db.execute("SELECT sch.*, s.name as student_name, s.student_id as sid FROM scholarships sch JOIN students s ON s.id=sch.student_id ORDER BY sch.id DESC").fetchall()
         return jsonify([dict(r) for r in rows])
     if request.method=='POST':
-        d=request.get_json()
+        d=request.get_json() or {}
         if not d.get('student_id') or not d.get('scheme'):
             return jsonify({"error":"student_id and scheme required"}),400
         if not db.execute("SELECT id FROM students WHERE id=?", (d.get('student_id'),)).fetchone():
@@ -3632,7 +3764,7 @@ def datesheets_api():
     if request.method=='GET':
         return jsonify([dict(r) for r in db.execute("SELECT d.*, c.name as class_name FROM datesheets d LEFT JOIN classes c ON c.id=d.class_id ORDER BY d.date").fetchall()])
     if request.method=='POST':
-        d=request.get_json()
+        d=request.get_json() or {}
         if d.get('class_id') and not db.execute("SELECT id FROM classes WHERE id=?", (d.get('class_id'),)).fetchone():
             return jsonify({"error":"Invalid class_id"}),400
         try:
@@ -3656,7 +3788,7 @@ def whatsapp_api():
     if request.method=='GET':
         rows=db.execute("SELECT w.*, c.name as class_name, s.name as section_name FROM whatsapp_groups w LEFT JOIN classes c ON c.id=w.class_id LEFT JOIN sections s ON s.id=w.section_id").fetchall()
         return jsonify([dict(r) for r in rows])
-    d=request.get_json()
+    d=request.get_json() or {}
     if not d.get('class_id') or not d.get('section_id') or not d.get('link'):
         return jsonify({"error":"class_id, section_id and link required"}),400
     # validate FK exists
@@ -3770,7 +3902,10 @@ def insights_api():
 @app.route('/api/heatmap')
 def heatmap_api():
     db=get_db()
-    month=request.args.get('month') or datetime.date.today().strftime("%Y-%m")
+    month=_valid_month(request.args.get('month'),
+                       default=datetime.date.today().strftime("%Y-%m"))
+    if month is None:
+        return jsonify({"error":"month must be YYYY-MM"}),400
     section_id=request.args.get('section_id')
     import calendar as calmod
     y,m=map(int, month.split('-'))
@@ -3800,13 +3935,26 @@ def goals_api():
     db=get_db()
     u=get_current_user()
     if request.method=='GET':
-        student_id=request.args.get('student_id')
-        # student/parent see own/child only
-        if u and u['role'] in ('student','parent') and u.get('linked_student_id'):
-            student_id=str(u['linked_student_id'])
-        if not student_id:
-            return jsonify({"error":"student_id required"}),400
-        g=db.execute("SELECT * FROM attendance_goals WHERE scope='student' AND ref_id=?", (student_id,)).fetchone()
+        # Ownership must not rest on users.linked_student_id alone. That column
+        # is NULL for every self-registered account and no admin path can set
+        # it, so the old guard was skipped entirely and the caller-supplied
+        # student_id was trusted - any student could read any classmate's goal
+        # and attendance percentage with ?student_id=7. student_scope() also
+        # consults parent_students / parents and refuses anything outside the
+        # caller's own set.
+        req_sid = request.args.get('student_id')
+        if not req_sid and u and u.get('linked_student_id'):
+            req_sid = str(u['linked_student_id'])   # keep the old default
+        scoped = student_scope(u, req_sid, must_have_link=True)
+        if isinstance(scoped, tuple):
+            return scoped
+        student_id=str(scoped)
+        # ORDER BY id DESC: this table historically had no unique constraint on
+        # (scope, ref_id), so INSERT OR REPLACE inserted a fresh row on every
+        # save and fetchone() returned the FIRST (oldest) one - a target set
+        # weeks ago shadowed every later edit. Prefer the newest row so legacy
+        # duplicates resolve to what the office most recently saved.
+        g=db.execute("SELECT * FROM attendance_goals WHERE scope='student' AND ref_id=? ORDER BY id DESC LIMIT 1", (student_id,)).fetchone()
         target=(g['target'] if g else 90)
         # current month pct
         today=datetime.date.today(); mkey=today.strftime("%Y-%m")
@@ -3822,13 +3970,24 @@ def goals_api():
     if not u or u['role'] not in ('admin','teacher'):
         return jsonify({"error":"Access denied"}),403
     d=request.get_json() or {}
+    if not d.get('student_id'):
+        return jsonify({"error":"student_id required"}),400
     try:
-        db.execute("INSERT OR REPLACE INTO attendance_goals (scope,ref_id,target,updated_by,updated_at) VALUES ('student',?,?,?,?)",
-                   (d.get('student_id'), float(d.get('target',90)), u['id'], datetime.datetime.now().isoformat()))
-        db.commit()
-        return jsonify({"ok":True})
-    except Exception as e:
-        return jsonify({"error":str(e)}),400
+        target=float(d.get('target',90))
+    except (TypeError, ValueError):
+        return jsonify({"error":"target must be a number"}),400
+    now=datetime.datetime.now().isoformat()
+    # attendance_goals has no UNIQUE(scope, ref_id), so INSERT OR REPLACE had
+    # nothing to conflict against: every save inserted a brand-new row (which
+    # the read then ignored, returning the oldest). Update the existing row
+    # and only insert when this student has no goal yet.
+    n=db.execute("UPDATE attendance_goals SET target=?, updated_by=?, updated_at=? WHERE scope='student' AND ref_id=?",
+                 (target, u['id'], now, d.get('student_id'))).rowcount
+    if not n:
+        db.execute("INSERT INTO attendance_goals (scope,ref_id,target,updated_by,updated_at) VALUES ('student',?,?,?,?)",
+                   (d.get('student_id'), target, u['id'], now))
+    db.commit()
+    return jsonify({"ok":True, "student_id":d.get('student_id'), "target":target, "updated":bool(n)})
 
 # ---------- Achievements (badges, class-level only) ----------
 @app.route('/api/achievements')
@@ -4206,6 +4365,13 @@ def reviews_api():
             sid = res
         if not sid or not d.get('date'):
             return jsonify({"error":"student_id and date required"}),400
+        # review_requests.student_id is a foreign key and PRAGMA foreign_keys
+        # is ON, so a stale id (e.g. a student deleted in another tab) raised
+        # an unhandled IntegrityError -> HTTP 500. Validate it is a real
+        # student first. student/parent are already constrained above by
+        # student_scope(), which returns 403 for anyone else's id.
+        if u['role'] in ('admin','teacher') and not db.execute("SELECT id FROM students WHERE id=?", (sid,)).fetchone():
+            return jsonify({"error":"Invalid student_id"}),400
         cur=db.execute("SELECT status FROM attendance WHERE student_id=? AND date=? ORDER BY rowid DESC LIMIT 1", (sid, d.get('date'))).fetchone()
         db.execute("INSERT INTO review_requests (student_id,date,current_status,reason,status,created_at) VALUES (?,?,?,?,?,?)",
                    (sid, d.get('date'), cur[0] if cur else None, d.get('reason',''), 'Pending', datetime.datetime.now().isoformat()))
@@ -4224,8 +4390,19 @@ def reviews_api():
     row=db.execute("SELECT * FROM review_requests WHERE id=?", (rid,)).fetchone()
     if not row: return jsonify({"error":"Not found"}),404
     if action=='approve' and request.args.get('new_status'):
-        ns=request.args.get('new_status')
-        db.execute("INSERT OR REPLACE INTO attendance (student_id,date,status) VALUES (?,?,?)", (row['student_id'], row['date'], ns))
+        ns=(request.args.get('new_status') or '').strip().upper()
+        # attendance.status carries CHECK(status IN ('P','A','L','T')), so an
+        # unvalidated value (the UI prompts for free text) raised an
+        # unhandled IntegrityError -> HTTP 500.
+        if ns not in ('P','A','L','T'):
+            return jsonify({"error":f"Invalid status {ns}. Use P/A/L/T"}),400
+        # Idempotent write: the daily slot has subject_id NULL and SQLite
+        # treats NULL as distinct inside UNIQUE(student_id,date,subject_id),
+        # so INSERT OR REPLACE inserted a second row instead of replacing -
+        # approving a review for an already-marked date duplicated the mark.
+        db.execute("DELETE FROM attendance WHERE student_id=? AND date=? AND (subject_id IS NULL OR subject_id='')",
+                   (row['student_id'], row['date']))
+        db.execute("INSERT INTO attendance (student_id,date,status) VALUES (?,?,?)", (row['student_id'], row['date'], ns))
         db.execute("INSERT INTO attendance_logs (student_id,date,old_status,new_status,changed_by,changed_at,note) VALUES (?,?,?,?,?,?,?)",
                    (row['student_id'], row['date'], row['current_status'], ns, u['id'], datetime.datetime.now().isoformat(), 'via review '+str(rid)))
         db.execute("UPDATE review_requests SET status='Approved', response=?, reviewed_by=? WHERE id=?", (request.args.get('response',''), u['id'], rid))
@@ -4277,6 +4454,13 @@ def public_events():
 
 @app.route('/api/public/contact', methods=['POST'])
 def public_contact():
+    # Now genuinely reachable: it is a POST, so the GET allowlist never
+    # covered it and _guard_api returned 401 before this handler ran - the
+    # public site's contact form was silently dead. With the route public it
+    # needs a limit of its own so it cannot be used to flood `complaints`.
+    hit = _api_limited("contact", _client_id(), 5, 300)
+    if hit:
+        return jsonify({"error": "Too many messages. Please try again later."}), 429
     d = request.get_json() or {}
     if not d.get('name') or not d.get('message'):
         return jsonify({"error": "name and message required"}), 400
@@ -4294,8 +4478,18 @@ def qr_session_create():
         return jsonify({"error": "Access denied"}), 403
     d = request.get_json() or {}
     import secrets
+    # int() on user input: "ttl_minutes":"abc" raised ValueError and
+    # "ttl_minutes":null raised TypeError - both uncaught -> HTTP 500.
+    try:
+        ttl = int(d.get('ttl_minutes') or 5)
+    except (TypeError, ValueError):
+        return jsonify({"error":"ttl_minutes must be a whole number of minutes"}),400
+    if ttl < 1 or ttl > 1440:
+        # an unbounded TTL minted a scanning token that stayed live
+        # indefinitely, which defeats the point of an expiring QR.
+        return jsonify({"error":"ttl_minutes must be between 1 and 1440"}),400
     token = secrets.token_urlsafe(16)
-    exp = (datetime.datetime.now() + datetime.timedelta(minutes=int(d.get('ttl_minutes', 5)))).isoformat()
+    exp = (datetime.datetime.now() + datetime.timedelta(minutes=ttl)).isoformat()
     get_db().execute("INSERT INTO qr_sessions (token,class_id,section_id,subject_id,date,expires_at,created_by,created_at) VALUES (?,?,?,?,?,?,?,?)",
                      (token, d.get('class_id'), d.get('section_id'), d.get('subject_id'), d.get('date') or datetime.date.today().isoformat(), exp, u['id'], datetime.datetime.now().isoformat()))
     get_db().commit()
@@ -4308,10 +4502,18 @@ def qr_scan_temp():
     d = request.get_json() or {}
     token = (d.get('token') or '').strip()
     student_code = (d.get('code') or '').strip()
-    # students/parents may only mark own/child attendance
-    if u['role'] in ('student', 'parent') and u.get('linked_student_id'):
-        own = get_db().execute("SELECT student_id FROM students WHERE id=?", (u['linked_student_id'],)).fetchone()
-        if own and student_code and student_code != own[0]:
+    # students/parents may only mark own/child attendance. The old guard keyed
+    # solely on users.linked_student_id, which is NULL for every
+    # self-registered account - so it was skipped entirely and any student
+    # holding the class QR could mark a classmate present. readable_student_ids()
+    # also consults parent_students / parents, so multi-child parents keep
+    # working. It returns None for admin/teacher, who stay unrestricted here.
+    allowed = readable_student_ids(u)
+    if allowed is not None:
+        if not student_code:
+            return jsonify({"error": "You can only mark your own attendance"}), 403
+        probe = get_db().execute("SELECT id FROM students WHERE student_id=?", (student_code,)).fetchone()
+        if not probe or probe['id'] not in allowed:
             return jsonify({"error": "You can only mark your own attendance"}), 403
     row = get_db().execute("SELECT * FROM qr_sessions WHERE token=?", (token,)).fetchone()
     if not row: return jsonify({"error": "Invalid QR"}), 400

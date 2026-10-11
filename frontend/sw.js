@@ -1,4 +1,4 @@
-const CACHE='dynamic-curo-v6';
+const CACHE='dynamic-curo-v7';
 const ASSETS=[
   '/',
   '/index.html',
@@ -21,6 +21,14 @@ self.addEventListener('activate',e=>{
 });
 self.addEventListener('fetch',e=>{
   if(e.request.method!=='GET') return;
+  // Never cache API responses. Every /api/* GET is an authenticated,
+  // per-session payload (profile, attendance, user lists, parent portal).
+  // Caching them meant that after logging out on a shared school machine the
+  // previous user's data stayed in Cache Storage and was served straight back
+  // to the next user whenever the network hiccuped or they went offline.
+  // Static shell assets are all this cache is for.
+  const url=new URL(e.request.url);
+  if(url.origin!==self.location.origin || url.pathname.startsWith('/api/')) return;
   e.respondWith(
     fetch(e.request).then(r=>{
       const clone=r.clone();

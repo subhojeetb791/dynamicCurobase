@@ -5,6 +5,27 @@ const $=s=>document.querySelector(s);
 const $$=s=>[...document.querySelectorAll(s)];
 let state={classes:[],currentUser:null, role:null};
 
+// ---- timezone-safe date helpers (YYYY-MM-DD) ----
+// new Date('YYYY-MM-DD') is parsed as UTC midnight, but getDate()/setDate()
+// are LOCAL - and toISOString() converts back to UTC. In any UTC+ zone the
+// day-stepping buttons silently did nothing, and in any UTC- zone they
+// skipped a day. India (UTC+5:30) is the app's own locale, so the report
+// "next day" button was visibly broken. All calendar arithmetic is done in
+// UTC so the browser's timezone can never shift a calendar day.
+function todayISO(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function shiftDate(iso, days){
+  const p=String(iso||'').split('-'); if(p.length!==3) return todayISO();
+  const dt=new Date(Date.UTC(+p[0], +p[1]-1, +p[2]));
+  dt.setUTCDate(dt.getUTCDate()+days);
+  return dt.toISOString().slice(0,10);
+}
+// Render a YYYY-MM-DD string as a calendar date. new Date('YYYY-MM-DD') is
+// UTC midnight but toLocaleDateString renders in the LOCAL zone, so in any
+// UTC- zone the attendance header and holiday table showed the PREVIOUS
+// day's weekday. Pinning timeZone:'UTC' renders the calendar date written.
+function fmtDateLong(iso){ try{ return new Date(String(iso).slice(0,10)+'T00:00:00Z').toLocaleDateString('en-IN',{weekday:'long', day:'numeric', month:'long', year:'numeric', timeZone:'UTC'}); }catch(e){ return String(iso||''); } }
+function fmtDow(iso){ try{ return new Date(String(iso).slice(0,10)+'T00:00:00Z').toLocaleDateString('en-IN',{weekday:'short', timeZone:'UTC'}); }catch(e){ return ''; } }
+
 // ---- FRONTEND RBAC MATRIX (mirrors backend) ----
 const VIEW_ROLES = {
   dashboard: ['admin','teacher','student','parent'],
@@ -172,6 +193,10 @@ const mb=$('#menuBtn'); if(mb) mb.onclick=()=>$('#sidebar').classList.toggle('op
 function toggleProfile(){ $('#profileDrop')?.classList.toggle('hidden'); }
 async function logout(){
   try{ await fetch(BACKEND_URL + '/api/auth/logout',{method:'POST',credentials:'same-origin'}); }catch(e){}
+  // Purge any cached shell/static assets too. The service worker no longer
+  // stores API responses, but clearing on logout means nothing at all from
+  // the signed-in session survives on a shared machine.
+  try{ if(window.caches&&caches.keys){ const ks=await caches.keys(); await Promise.all(ks.map(k=>caches.delete(k))); } }catch(e){}
   state.currentUser=null; state.role=null;
   if(typeof logoutPortal==='function') logoutPortal();
   $('#appShell')?.classList.add('hidden');
@@ -336,8 +361,8 @@ async function loadDashboard(){
   el('kpiClasses', s.total_classes??'-');
   const kt=$('#kpiTeachers'); if(kt) kt.textContent=s.total_teachers??'-';
   const dashDate=document.getElementById('dashDate');
-  if(dashDate && !dashDate.value) dashDate.value=new Date().toISOString().slice(0,10);
-  const date=dashDate?.value || new Date().toISOString().slice(0,10);
+  if(dashDate && !dashDate.value) dashDate.value=todayISO();
+  const date=dashDate?.value || todayISO();
   const d=await api('/api/attendance/dashboard?date='+date).catch(()=>({present:0,absent:0,leave:0,late:0,not_marked:0,percentage:0}));
   el('legP', d.present); el('legA', d.absent); el('legL', d.leave);
   const lt=$('#legT'); if(lt) lt.textContent=d.late||0;
@@ -458,7 +483,7 @@ async function loadAttMeta(){
     }
   }catch(e){}
 }
-function initAttendance(){ const t=new Date().toISOString().slice(0,10); const el=$('#attDate'); if(el && !el.value) el.value=t; loadAttMeta().then(loadAttendance); if(!$('#attDate').value) $('#attDate').value=t; }
+function initAttendance(){ const t=todayISO(); const el=$('#attDate'); if(el && !el.value) el.value=t; loadAttMeta().then(loadAttendance); if(!$('#attDate').value) $('#attDate').value=t; }
 function updateOfflineBadge(){ const b=$('#offlineBadge'); if(b) b.classList.toggle('hidden', navigator.onLine); }
 window.addEventListener('online', ()=>{ updateOfflineBadge(); toast('Back online — syncing'); const q=JSON.parse(localStorage.getItem('attQueue')||'[]'); if(q.length){ flushAttQueue(); } });
 window.addEventListener('offline', updateOfflineBadge);
@@ -478,7 +503,7 @@ async function loadAttendance(){
   const subj=$('#attSubject')?.value||'';
   const q=($('#attSearch')?.value||'').toLowerCase();
   let data; try{ data=await api(`/api/attendance?date=${date}&class_id=${cid}&section_id=${sid}&subject_id=${subj}`); }catch(e){ if(String(e.message).includes('Access denied')){ $('#attTable').innerHTML=`<div class="muted" style="padding:16px">🔒 ${e.message}</div>`; return;} data={students:[], is_holiday:false}; }
-  const dow=new Date(date).toLocaleDateString('en-IN',{weekday:'long', day:'numeric', month:'long', year:'numeric'});
+  const dow=fmtDateLong(date);
   const wd=$('#attWeekday'); if(wd) wd.textContent=dow;
   const warn=$('#holidayWarn'); if(warn){ if(data.is_holiday){ warn.textContent='🔵 Holiday — '+(data.holiday?.name||'Sunday')+' — Attendance blocked'; warn.classList.remove('hidden'); } else warn.classList.add('hidden'); }
   let dash; try{ dash=await api(`/api/attendance/dashboard?date=${date}&class_id=${cid}&section_id=${sid}&subject_id=${subj}`); }catch(e){ dash={total:0, present:0, absent:0, leave:0, late:0, not_marked:0, percentage:0}; }
@@ -543,8 +568,8 @@ async function loadAttendance(){
 }
 function markAll(st){ document.querySelectorAll('.attStatus').forEach(sel=>{ sel.value=st; sel.dispatchEvent(new Event('change')); }); toast('Marked all '+st); }
 function resetAttendance(){ document.querySelectorAll('.attStatus').forEach(sel=>{ sel.value=''; }); document.querySelectorAll('[data-reason]').forEach(i=>i.value=''); toast('Reset'); }
-function attNav(d){ const dt=new Date($('#attDate').value); dt.setDate(dt.getDate()+d); $('#attDate').value=dt.toISOString().slice(0,10); loadAttendance(); }
-function attToday(){ $('#attDate').value=new Date().toISOString().slice(0,10); loadAttendance(); }
+function attNav(d){ $('#attDate').value=shiftDate($('#attDate').value, d); loadAttendance(); }
+function attToday(){ $('#attDate').value=todayISO(); loadAttendance(); }
 function confirmSaveAttendance(){
   if(!['admin','teacher'].includes(state.role)) return toast('Access denied: cannot mark attendance',false);
   const n=document.querySelectorAll('.attStatus').length;
@@ -577,7 +602,7 @@ async function completeAttendance(){ if(!['admin','teacher'].includes(state.role
 async function scanAttendance(){ if(!['admin','teacher'].includes(state.role)) return toast('Access denied',false); try { if (window.Capacitor) { const image = await Capacitor.Plugins.Camera.getPhoto({ quality: 90, allowEditing: false, resultType: 'base64' }); toast('Photo captured via Capacitor Camera API'); } const code=document.querySelector('#scanCode').value.trim(), status=document.querySelector('#scanStatus').value, date=document.querySelector('#attDate').value; if(!code) return toast('Enter Student ID',false); await api('/api/attendance/scan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code,status,date})}); toast('Marked '+status+' ?'); loadAttendance(); const ss=document.querySelector('#scanSuccess'); if(ss) ss.classList.remove('hidden'); }catch(e){toast(e.message,false)} }
 
 // MONTHLY
-function initMonthly(){ const el=$('#monMonth'); if(el && !el.value) el.value=new Date().toISOString().slice(0,7); loadMonthly(); }
+function initMonthly(){ const el=$('#monMonth'); if(el && !el.value) el.value=todayISO().slice(0,7); loadMonthly(); }
 async function loadMonthly(){
   const month=$('#monMonth').value, cid=$('#monClass').value, sid=$('#monSection').value;
   if(!month) return toast('Select month',false);
@@ -595,7 +620,7 @@ async function loadMonthly(){
 function exportMonthly(type){ const month=$('#monMonth').value; if(!month) return toast('Select month',false); const cid=$('#monClass').value, sid=$('#monSection').value; window.open(`/api/export/monthly/${type}?month=${month}&class_id=${cid}&section_id=${sid}`,'_blank'); }
 
 // HOLIDAYS / STAFF etc
-async function loadHolidays(){ let data; try{ data=await api('/api/holidays'); }catch(e){ data=[]; } const el=$('#holidayTable'); if(!el) return; el.innerHTML=data.length? `<table><thead><tr><th>Date</th><th>Name</th><th>Type</th><th></th></tr></thead><tbody>`+data.map(h=>`<tr><td>${h.date} <small>(${new Date(h.date).toLocaleDateString('en-IN',{weekday:'short'})})</small></td><td>${h.name}</td><td><span class="pill">${h.type}</span></td><td>${state.role==='admin'?`<button class="btn-red" onclick="delHoliday(${h.id})">Delete</button>`:''}</td></tr>`).join('')+`</tbody></table>` : `<div class="muted" style="padding:16px">No holidays yet. Sundays are auto-holidays.</div>`; }
+async function loadHolidays(){ let data; try{ data=await api('/api/holidays'); }catch(e){ data=[]; } const el=$('#holidayTable'); if(!el) return; el.innerHTML=data.length? `<table><thead><tr><th>Date</th><th>Name</th><th>Type</th><th></th></tr></thead><tbody>`+data.map(h=>`<tr><td>${h.date} <small>(${fmtDow(h.date)})</small></td><td>${h.name}</td><td><span class="pill">${h.type}</span></td><td>${state.role==='admin'?`<button class="btn-red" onclick="delHoliday(${h.id})">Delete</button>`:''}</td></tr>`).join('')+`</tbody></table>` : `<div class="muted" style="padding:16px">No holidays yet. Sundays are auto-holidays.</div>`; }
 async function addHoliday(){ if(state.role!=='admin') return toast('Admin only',false); const date=$('#holDate').value, name=$('#holName').value.trim(), type=$('#holType').value; if(!date||!name) return toast('Date & name required',false); try{await api('/api/holidays',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({date,name,type})}); loadHolidays(); toast('Holiday added');}catch(e){toast(e.message,false)} }
 async function delHoliday(id){ if(state.role!=='admin') return toast('Admin only',false); try{await api('/api/holidays?id='+id,{method:'DELETE'}); loadHolidays(); toast('Deleted');}catch(e){toast(e.message,false)} }
 
@@ -646,7 +671,7 @@ async function loadDateSheets(){
 function renderDateSheets(){
   const el=$('#dsTable'); if(!el) return;
   const all=(window._dsData||[]);
-  const today=new Date().toISOString().slice(0,10);
+  const today=todayISO();
   const rows=all.filter(d=>_dsTab==='upcoming' ? d.date>=today : d.date<today)
                 .sort((a,b)=> _dsTab==='upcoming' ? a.date.localeCompare(b.date) : b.date.localeCompare(a.date));
   const cnt=$('#dsCount'); if(cnt) cnt.textContent=rows.length+' exam'+(rows.length===1?'':'s');
@@ -681,7 +706,7 @@ async function delDS(id){ if(state.role!=='admin') return toast('Admin only',fal
 async function initMarksChips(){ let subs; try{ subs=await api('/api/subjects'); }catch(e){ subs=[]; } const el=$('#subjectChips'); if(!el) return; el.innerHTML=subs.map(s=>`<span class="pill" style="background:#eef2ff">${s.name} ${state.role==='admin'?`<a href="#" onclick="delSubject(${s.id});return false" style="color:var(--red)">✕</a>`:''}</span>`).join(''); }
 async function addSubject(){ if(state.role!=='admin') return toast('Admin only',false); const n=$('#newSubject').value.trim(); if(!n) return; try{await api('/api/subjects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n})}); $('#newSubject').value=''; initMarksChips(); toast('Subject added');}catch(e){toast(e.message,false)} }
 async function delSubject(id){ if(state.role!=='admin') return toast('Admin only',false); try{await api('/api/subjects?id='+id,{method:'DELETE'}); initMarksChips();}catch(e){toast(e.message,false)} }
-async function loadMarksReport(){ const cid=$('#repClass')?.value||'', exam=$('#repExam')?.value||'Mid-Term'; let data; try{ data=await api(`/api/marks/report?class_id=${cid}&exam_type=${encodeURIComponent(exam)}`); }catch(e){ toast(e.message,false); return; } const subs=await api('/api/subjects').catch(()=>[]); if(!data.length){ const el=$('#marksReport'); if(el) el.innerHTML=`<div class="muted" style="padding:16px">No marks yet for ${exam}.</div>`; return; } const canManage = ['admin','teacher'].includes(state.role); const el=$('#marksReport'); if(el) el.innerHTML=`<table><thead><tr><th>Roll</th><th>Student</th><th>Marks</th><th>Total</th><th>%</th><th></th></tr></thead><tbody>`+data.map(d=>`<tr><td>${d.student.roll_no||''}</td><td><b>${d.student.name}</b><br><small>${d.student.student_id}</small></td><td>${d.marks.map(m=>`${m.subject_name}:${m.obtained}/${m.max_marks}`).join(', ')||'—'}</td><td>${d.total_obt}/${d.total_max}</td><td><span class="badge ${d.pct>=90?'P':d.pct>=60?'L':'A'}">${d.pct}%</span></td><td>${canManage?`<button class="btn-outline" onclick="openMarksEntry(${d.student.id},'${d.student.name.replace(/'/g,"")}','${exam}')">Enter</button>`:''}</td></tr>`).join('')+`</tbody></table>`; window._subs=subs; }
+async function loadMarksReport(){ const cid=$('#repClass')?.value||'', exam=$('#repExam')?.value||'Mid-Term'; let data; try{ data=await api(`/api/marks/report?class_id=${cid}&exam_type=${encodeURIComponent(exam)}`); }catch(e){ toast(e.message,false); return; } const subs=await api('/api/subjects').catch(()=>[]); if(!data.length){ const el=$('#marksReport'); if(el) el.innerHTML=`<div class="muted" style="padding:16px">No marks yet for ${exam}.</div>`; return; } const canManage = ['admin','teacher'].includes(state.role); const el=$('#marksReport'); if(el) el.innerHTML=`<table><thead><tr><th>Roll</th><th>Student</th><th>Marks</th><th>Total</th><th>%</th><th></th></tr></thead><tbody>`+data.map(d=>`<tr><td>${d.student.roll_no||''}</td><td><b>${d.student.name}</b><br><small>${d.student.student_id}</small></td><td>${d.marks.map(m=>`${m.subject_name}:${m.obtained}/${m.max_marks}`).join(', ')||'—'}</td><td>${d.total_obt}/${d.total_max}</td><td><span class="badge ${d.pct>=90?'P':d.pct>=60?'L':'A'}">${d.pct}%</span></td><td>${canManage?`<button class="btn-outline" onclick='openMarksEntry(${JSON.stringify(d.student.id)},${JSON.stringify(d.student.name).replace(/'/g,"&#39;")},${JSON.stringify(exam)})'>Enter</button>`:''}</td></tr>`).join('')+`</tbody></table>`; window._subs=subs; }
 let _curMarks=null,_curExam=null;
 async function openMarksEntry(sid,name,exam){ if(!['admin','teacher'].includes(state.role)) return toast('Access denied',false); _curMarks=sid; _curExam=exam; const elN=$('#marksStudentName'); if(elN) elN.textContent=name+' — '+exam; const me=$('#marksEntry'); if(me) me.classList.remove('hidden'); const subs=window._subs||await api('/api/subjects'); let ex; try{ ex=await api(`/api/marks?student_id=${sid}&exam_type=${encodeURIComponent(exam)}`); }catch(e){ ex=[]; } const map={}; ex.forEach(m=>map[m.subject_id]=m); const inp=$('#marksInputs'); if(inp) inp.innerHTML=subs.map(s=>`<div style="display:flex;gap:8px;align-items:center;margin:6px 0"><span style="min-width:120px">${s.name}</span><input type="number" data-max="max-${s.id}" value="${map[s.id]?.max_marks||100}" style="width:80px;padding:6px;border:1px solid #e2e8f0;border-radius:8px"><input type="number" data-obt="${s.id}" value="${map[s.id]?.obtained||''}" placeholder="Obtained" style="width:80px;padding:6px;border:1px solid #e2e8f0;border-radius:8px"></div>`).join(''); }
 async function saveMarks(){ if(!['admin','teacher'].includes(state.role)) return toast('Access denied',false); const marks=[...document.querySelectorAll('[data-obt]')].map(i=>{const sid=i.getAttribute('data-obt'); const obt=parseInt(i.value); if(isNaN(obt)) return null; const max=parseInt(document.querySelector(`[data-max="max-${sid}"]`).value)||100; return {subject_id:parseInt(sid), max_marks:max, obtained:obt}}).filter(Boolean); if(!marks.length) return toast('Enter marks',false); try{await api('/api/marks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({student_id:_curMarks, exam_type:_curExam, marks})}); toast('Marks saved'); loadMarksReport(); const me=$('#marksEntry'); if(me) me.classList.add('hidden');}catch(e){toast(e.message,false)} }
@@ -779,7 +804,7 @@ async function addENote(){ if(!['admin','teacher'].includes(state.role)) return 
 async function delENote(id){ if(!['admin','teacher'].includes(state.role)) return toast('Access denied',false); try{await api('/api/enotes?id='+id,{method:'DELETE'}); loadENotes();}catch(e){toast(e.message,false)} }
 
 async function loadMeals(){ let data; try{ data=await api('/api/meals'); }catch(e){ data=[]; } const el=$('#mealTable'); if(!el) return; el.innerHTML=data.length? `<table><thead><tr><th>Date</th><th>Class</th><th>Count</th><th>Menu</th><th></th></tr></thead><tbody>`+data.map(m=>`<tr><td>${m.date}</td><td>${m.class_id||''}</td><td>${m.count}</td><td>${m.menu}</td><td>${state.role==='admin'?`<button class="btn-red" onclick="delMeal(${m.id})">Delete</button>`:''}</td></tr>`).join('')+`</tbody></table>` : `<div class="muted" style="padding:16px">No meals</div>`; }
-async function addMeal(){ if(state.role!=='admin') return toast('Admin only',false); const date=$('#mealDate').value||new Date().toISOString().slice(0,10), class_id=$('#mealClass').value||null, count=$('#mealCount').value, menu=$('#mealMenu').value; if(!count) return toast('Count required',false); try{await api('/api/meals',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({date,class_id,count,menu})}); loadMeals(); toast('Meal added');}catch(e){toast(e.message,false)} }
+async function addMeal(){ if(state.role!=='admin') return toast('Admin only',false); const date=$('#mealDate').value||todayISO(), class_id=$('#mealClass').value||null, count=$('#mealCount').value, menu=$('#mealMenu').value; if(!count) return toast('Count required',false); try{await api('/api/meals',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({date,class_id,count,menu})}); loadMeals(); toast('Meal added');}catch(e){toast(e.message,false)} }
 async function delMeal(id){ if(state.role!=='admin') return toast('Admin only',false); try{await api('/api/meals?id='+id,{method:'DELETE'}); loadMeals();}catch(e){toast(e.message,false)} }
 
 async function loadScholarships(){ let data; try{ data=await api('/api/scholarships'); }catch(e){ data=[]; } const el=$('#schTable'); if(!el) return; el.innerHTML=data.length? `<table><thead><tr><th>Student</th><th>Scheme</th><th>Amount</th><th>Status</th><th></th></tr></thead><tbody>`+data.map(s=>`<tr><td>${s.student_name} (${s.sid})</td><td>${s.scheme}</td><td>${s.amount||''}</td><td><span class="pill g">${s.status}</span></td><td>${state.role==='admin'?`<button class="btn-red" onclick="delSch(${s.id})">Delete</button>`:''}</td></tr>`).join('')+`</tbody></table>` : `<div class="muted" style="padding:16px">No scholarships</div>`; }
@@ -889,7 +914,7 @@ async function addTeacher(){
 }
 async function delTeacher(id){ if(state.role!=='admin') return toast('Admin only',false); if(!confirm('Delete teacher?')) return; try{ await api('/api/teachers?id='+id,{method:'DELETE'}); loadTeachers(); }catch(e){ toast(e.message,false); } }
 // ---- CALENDAR ----
-function initCalendar(){ const el=$('#calMonth'); if(el && !el.value) el.value=new Date().toISOString().slice(0,7); loadCalendar(); }
+function initCalendar(){ const el=$('#calMonth'); if(el && !el.value) el.value=todayISO().slice(0,7); loadCalendar(); }
 async function loadCalendar(){
   const month=$('#calMonth').value, cid=$('#calClass')?.value||'', sid=$('#calSection')?.value||'';
   if(!month) return toast('Select month',false);
@@ -1101,7 +1126,7 @@ async function loadTimetable(){
   if(head) head.innerHTML=
     `<button class="btn-outline" onclick="ttPrint()"><span class="ic" data-icon="file-text"></span> Print</button>`+
     `<button class="btn-outline" onclick="ttPdf()"><span class="ic" data-icon="file-down"></span> PDF</button>`;
-  if(!$('#ttDate').value) $('#ttDate').value=new Date().toISOString().slice(0,10);
+  if(!$('#ttDate').value) $('#ttDate').value=todayISO();
   if(!ttState.sessions.length){
     try{ ttState.sessions=await api('/api/sessions'); }catch(e){ ttState.sessions=[]; }
     const sel=$('#ttSession');
@@ -1435,7 +1460,7 @@ async function ttNewVersion(){
   try{
     const r=await api('/api/timetable/versions',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({class_id:+cid,section_id:+sid,name:'New timetable',
-        effective_from:new Date().toISOString().slice(0,10)})});
+        effective_from:todayISO()})});
     ttState.versionId=r.id;
     toast('Draft created');
     await ttLoadVersions();
@@ -1513,7 +1538,7 @@ async function ttDuplicateOpen(){
           <div class="toolbar">
             <select id="dupClass">${ttOpts(cls.map(c=>({v:c.id,t:'Class '+c.name})),cls[0]?.id)}</select>
             <select id="dupSection"></select>
-            <input type="date" id="dupEff" value="${new Date().toISOString().slice(0,10)}">
+            <input type="date" id="dupEff" value="${todayISO()}">
             <button class="btn-outline" onclick="ttDupClass()">Copy to class</button>
           </div></div>
       </div>`;
@@ -1635,7 +1660,7 @@ async function ttLoadHistory(){
 }
 
 // ---- HEATMAP ----
-function initHeatmap(){ const el=$('#heatMonth'); if(el && !el.value) el.value=new Date().toISOString().slice(0,7); loadHeatmap(); }
+function initHeatmap(){ const el=$('#heatMonth'); if(el && !el.value) el.value=todayISO().slice(0,7); loadHeatmap(); }
 async function loadHeatmap(){
   const month=$('#heatMonth').value; if(!month) return toast('Select month',false);
   let data; try{ data=await api('/api/heatmap?month='+month); }catch(e){ return; }
@@ -1787,14 +1812,18 @@ async function scanQRNative(){
       buildMobileNav();
       loadDashboard(); loadClasses(); loadSettings();
     } else {
-      try{ await loadClasses(); }catch(e){}
+      // NOT signed in. /api/classes sits behind the default-deny guard, so
+      // calling loadClasses() here was a guaranteed 401 - plus a console
+      // error - for every anonymous visitor, and it populated nothing: all
+      // fourteen selects it fills live inside #appShell, which the login
+      // screen never shows. It is re-loaded by enterPortal() on sign-in.
       // honour ?login=student / ?login=parent deep links
       try{
         const want=new URLSearchParams(location.search).get('login');
         if(want && ['student','parent','staff'].includes(want)) showLoginCard(want);
       }catch(e){}
     }
-  }catch(e){ try{ await loadClasses(); }catch(e){} }
+  }catch(e){ if(state.role){ try{ await loadClasses(); }catch(e){} } }
   // ensure login form Enter works (already via onsubmit)
   applySavedPrefs();
   updateOnlineState();
@@ -1934,8 +1963,8 @@ function updateOnlineState(){
 // ============================================================================
 let _repRange='daily';
 function initReports(){
-  const d=$('#repDate'); if(d && !d.value) d.value=new Date().toISOString().slice(0,10);
-  const m=$('#repMonth'); if(m && !m.value) m.value=new Date().toISOString().slice(0,7);
+  const d=$('#repDate'); if(d && !d.value) d.value=todayISO();
+  const m=$('#repMonth'); if(m && !m.value) m.value=todayISO().slice(0,7);
   setReportRange(_repRange,true);
   loadReports();
 }
@@ -1950,12 +1979,11 @@ function setReportRange(r,silent){
 }
 function reportNav(dir){
   const d=$('#repDate'); if(!d||!d.value) return;
-  const dt=new Date(d.value+'T00:00:00'); dt.setDate(dt.getDate()+dir);
-  d.value=dt.toISOString().slice(0,10); loadReports();
+  d.value=shiftDate(d.value, dir); loadReports();
 }
 function exportReport(fmt){
   // Reports reuses the monthly export endpoint so the file matches the on-screen maths
-  const month=$('#repMonth')?.value || new Date().toISOString().slice(0,7);
+  const month=$('#repMonth')?.value || todayISO().slice(0,7);
   const cid=$('#repAClass')?.value||'', sid=$('#repASection')?.value||'';
   window.open(`/api/export/monthly/${fmt}?month=${month}&class_id=${cid}&section_id=${sid}`,'_blank');
   toast('Opening '+fmt.toUpperCase()+' export…');
@@ -1971,7 +1999,7 @@ async function loadReports(){
   const cid=$('#repAClass')?.value||'', sid=$('#repASection')?.value||'';
   const qs=`class_id=${cid}&section_id=${sid}`;
   try{
-    const day=$('#repDate')?.value || new Date().toISOString().slice(0,10);
+    const day=$('#repDate')?.value || todayISO();
     const month=$('#repMonth')?.value || day.slice(0,7);
     const [dash,ana,cal,mon]=await Promise.all([
       api(`/api/attendance/dashboard?date=${day}&${qs}`),
@@ -2060,7 +2088,7 @@ async function loadReports(){
         html+=cal.days.map(d=>{
           const cls=['cal-day'];
           if(d.is_holiday) cls.push('holiday');
-          if(d.date===new Date().toISOString().slice(0,10)) cls.push('today');
+          if(d.date===todayISO()) cls.push('today');
           const dots=['P','A','L','T'].filter(k=>d[{P:'present',A:'absent',L:'leave',T:'late'}[k]]>0)
             .map(k=>`<i class="cal-dot ${k}"></i>`).join('');
           return `<div class="${cls.join(' ')}" title="${d.date} — ${d.percentage}%">
@@ -2073,6 +2101,13 @@ async function loadReports(){
     }
   }catch(e){
     stats.innerHTML=`<div class="card error-state" style="grid-column:1/-1">${icon('circle-alert')}<div><b>Could not load reports</b><br><span class="sm">${esc(e.message||e)}</span></div></div>`;
+    // _repSkeleton() already wrote shimmer placeholders into these four, and
+    // nothing else reaches them once a request rejects - without this they
+    // kept animating forever, which reads as an app that never finishes
+    // loading rather than as an error.
+    ['#repClassBars','#repLow','#repHistory','#repCalGrid'].forEach(id=>{
+      const el=document.querySelector(id); if(el) el.innerHTML='';
+    });
   }
 }
 
@@ -2081,7 +2116,7 @@ async function loadReports(){
 // ============================================================================
 async function loadRecentActivity(){
   const el=document.getElementById('recentActivity'); if(!el) return;
-  const date=$('#dashDate')?.value || new Date().toISOString().slice(0,10);
+  const date=$('#dashDate')?.value || todayISO();
   let ana; try{ ana=await api('/api/analytics'); }catch(e){ ana=null; }
   if(!ana || !(ana.class_comparison||[]).length){
     el.innerHTML='<div class="inline-empty">No attendance recorded yet today.</div>'; return;
