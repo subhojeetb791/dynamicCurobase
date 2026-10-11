@@ -39,6 +39,10 @@ const VIEW_ROLES = {
   exams: ['admin','teacher','student','parent'],
   profile: ['admin','teacher','student','parent'],
   password: ['admin','teacher','student','parent'],
+  editprofile: ['admin','teacher','student','parent'],
+  accountsettings: ['admin','teacher','student','parent'],
+  privacy: ['admin','teacher','student','parent'],
+  onboarding: ['admin','teacher','student','parent'],
   'denied': ['admin','teacher','student','parent']
 };
 function canView(role, view){
@@ -122,7 +126,7 @@ function navigate(v){
   closeMoreSheet();
   syncStaffOnlyControls();
   if(v==='features') v='features';
-  const t=document.querySelector(`[data-view="${v}"]`)?.textContent?.trim() || v;
+  const t=document.querySelector(`[data-view="${v}"]`)?.textContent?.trim() || VIEW_LABELS[v] || v;
   const pt=$('#pageTitle'); if(pt) pt.textContent=t;
   if(innerWidth<900) closeSidebar();
   if(v==='dashboard') loadDashboard();
@@ -152,6 +156,10 @@ function navigate(v){
   if(v==='exams') loadExamReport();
   if(v==='profile') loadProfileView();
   if(v==='password') loadPasswordView();
+  if(v==='editprofile') epLoad();
+  if(v==='accountsettings') asLoad();
+  if(v==='privacy') pvLoad();
+  if(v==='onboarding') obLoad();
   if(v==='meals') loadMeals();
   if(v==='scholarship') loadScholarships();
   if(v==='complaints') loadComplaints();
@@ -1806,7 +1814,9 @@ const VIEW_LABELS={
   staff:'Staff', parents:'Parents', messages:'Messages', holidays:'Holidays',
   complaints:'Complaint Box', datesheet:'Date Sheet', timetable:'Timetable', heatmap:'Heatmap',
   studentid:'Student ID', reviews:'Reviews', qr:'QR Attendance', monthly:'Monthly Report',
-  enotes:'E-Notes', features:'All Features', meals:'Mid-Day Meal', scholarship:'Scholarship'
+  enotes:'E-Notes', features:'All Features', meals:'Mid-Day Meal', scholarship:'Scholarship',
+  editprofile:'Edit Profile', accountsettings:'Account Settings', privacy:'Privacy & Preferences',
+  onboarding:'Complete Profile'
 };
 const VIEW_ICONS={
   dashboard:'layout-dashboard', students:'graduation-cap', teachers:'user-check', classes:'building-2',
@@ -1816,7 +1826,8 @@ const VIEW_ICONS={
   parents:'user-plus', messages:'message-square', holidays:'calendar', complaints:'circle-alert',
   datesheet:'clipboard-list', timetable:'clock', heatmap:'grid-2x2', studentid:'badge-check',
   reviews:'star', qr:'qr-code', monthly:'table-2', enotes:'book-open', features:'zap',
-  meals:'clipboard-list', scholarship:'award'
+  meals:'clipboard-list', scholarship:'award',
+  editprofile:'pencil', accountsettings:'settings', privacy:'lock', onboarding:'list-checks'
 };
 // Bottom bar per role: Home, <role items>, More  (per design brief)
 const MNAV={
@@ -1827,10 +1838,10 @@ const MNAV={
 };
 // Everything less-used lives in the More sheet
 const MORE_ITEMS={
-  admin:['teachers','classes','analytics','notices','notifications','qr','monthly','attcal','homework','exams','calendar','timetable','staff','parents','messages','holidays','complaints','datesheet','heatmap','studentid','reviews','enotes','features','settings','password','profile'],
-  teacher:['students','classes','notices','notifications','qr','monthly','attcal','homework','exams','calendar','timetable','holidays','complaints','datesheet','studentid','reviews','enotes','features','password','profile'],
-  student:['reports','homework','exams','datesheet','notifications','calendar','timetable','complaints','reviews','holidays','studentid','features','password','profile'],
-  parent:['reports','homework','exams','datesheet','notifications','calendar','timetable','complaints','holidays','studentid','features','password','profile']
+  admin:['teachers','classes','analytics','notices','notifications','qr','monthly','attcal','homework','exams','calendar','timetable','staff','parents','messages','holidays','complaints','datesheet','heatmap','studentid','reviews','enotes','features','settings','password','profile','editprofile','accountsettings','privacy','onboarding'],
+  teacher:['students','classes','notices','notifications','qr','monthly','attcal','homework','exams','calendar','timetable','holidays','complaints','datesheet','studentid','reviews','enotes','features','password','profile','editprofile','accountsettings','privacy','onboarding'],
+  student:['reports','homework','exams','datesheet','notifications','calendar','timetable','complaints','reviews','holidays','studentid','features','password','profile','editprofile','accountsettings','privacy','onboarding'],
+  parent:['reports','homework','exams','datesheet','notifications','calendar','timetable','complaints','holidays','studentid','features','password','profile','editprofile','accountsettings','privacy','onboarding']
 };
 function buildMobileNav(){
   const nav=document.getElementById('mobileNav'); if(!nav) return;
@@ -2104,5 +2115,762 @@ function toggleCommandCenter(){
     if(cb && card && localStorage.getItem('curoHideCC')==='1'){ cb.checked=true; card.classList.add('hidden'); }
   }catch(e){}
 })();
+
+// ============================================================================
+// PROFILE MODULE — sign-up, reset, dashboard, edit, settings, privacy, wizard
+// ============================================================================
+const PF_LANGS=['English','हिन्दी','বাংলা','தமிழ்','తెలుగు','मराठी','ગુજરાતી','ಕನ್ನಡ','മലയാളം','اردو'];
+
+function langOpts(sel){ return PF_LANGS.map(l=>`<option${l===sel?' selected':''}>${esc(l)}</option>`).join(''); }
+/* Mirrors the server policy exactly, so the user is not told "saved" only to
+   be corrected by an API error a moment later. */
+function pwLocalProblem(pw){
+  if(pw.length<8) return 'Use at least 8 characters.';
+  if(!/[A-Za-z]/.test(pw)) return 'Include at least one letter.';
+  if(!/\d/.test(pw)) return 'Include at least one number.';
+  return '';
+}
+function urlLocalProblem(v){
+  if(!v) return '';
+  if(v.length>200) return 'That link is too long.';
+  if(!/^https?:\/\//i.test(v)) return 'Links must start with http:// or https://';
+  return '';
+}
+function showFieldErrors(map, els){
+  Object.keys(els||{}).forEach(k=>{
+    const box=document.getElementById('err-'+els[k]);
+    if(box) box.textContent = map[k] || '';
+  });
+}
+function setMsg(sel, text, ok){
+  const el=$(sel); if(!el) return;
+  el.textContent = text || '';
+  el.classList.toggle('ok', !!ok);
+}
+function paint(){ try{ paintIcons(); }catch(e){} }
+
+// ---------------------------------------------------------------------------
+// Sign up (login screen)
+// ---------------------------------------------------------------------------
+const SU_EL={full_name:'suName', username:'suUser', email:'suEmail', phone:'suPhone',
+             password:'suPass', confirm_password:'suPass2', dob:'suDob',
+             language:'suLang', country:'suCountry', accept_terms:'suTerms'};
+const SU_EMAIL=/^[^@\s]{1,64}@[^@\s.]+(\.[^@\s.]+)+$/;
+
+function suClear(){ showFieldErrors({}, SU_EL); setMsg('#suMsg',''); }
+
+async function doSignup(e){
+  if(e) e.preventDefault();
+  const g=id=>(document.getElementById(id)?.value||'').trim();
+  const body={
+    full_name:g('suName'), username:g('suUser'), email:g('suEmail'), phone:g('suPhone'),
+    password:document.getElementById('suPass').value,
+    confirm_password:document.getElementById('suPass2').value,
+    dob:g('suDob'), language:g('suLang')||'English', country:g('suCountry'),
+    accept_terms:!!document.getElementById('suTerms').checked
+  };
+  suClear();
+  // Client-side first so the obvious mistakes never cost a round trip; the
+  // server repeats every one of these plus the uniqueness checks.
+  const local={};
+  if(body.full_name.length<2) local.full_name='Please enter your full name.';
+  if(!/^[A-Za-z0-9][A-Za-z0-9._-]{2,29}$/.test(body.username))
+    local.username='Use 3–30 characters: letters, numbers, dot, dash or underscore.';
+  if(!SU_EMAIL.test(body.email)) local.email='Enter a valid email address.';
+  if(body.phone && !/^\+?\d{7,15}$/.test(body.phone.replace(/[\s()-]/g,'')))
+    local.phone='Enter 7–15 digits, optionally starting with +.';
+  const pp=pwLocalProblem(body.password); if(pp) local.password=pp;
+  if(!local.password && body.confirm_password!==body.password)
+    local.confirm_password='The two passwords do not match.';
+  if(!body.accept_terms) local.accept_terms='Please accept the Terms of Service and Privacy Policy.';
+  if(Object.keys(local).length){ showFieldErrors(local, SU_EL); return; }
+
+  const btn=$('#suBtn'); if(btn){ btn.disabled=true; btn.textContent='Creating account…'; }
+  try{
+    const r=await fetch(BACKEND_URL+'/api/auth/register',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      credentials:'same-origin', body:JSON.stringify(body)});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok){
+      if(j.fields) showFieldErrors(j.fields, SU_EL);
+      setMsg('#suMsg', j.error||'Could not create the account.');
+      return;
+    }
+    suDone(j, body.username);
+  }catch(err){
+    setMsg('#suMsg','Could not reach the server. Please try again.');
+  }finally{
+    const b=$('#suBtn'); if(b){ b.disabled=false; b.innerHTML='Create Account '+icon('arrow-right'); paint(); }
+  }
+}
+
+function suDone(j, username){
+  const form=$('#signupForm'); if(!form) return;
+  form.innerHTML =
+    `<div class="login-role-icon" aria-hidden="true">${icon('circle-check')}</div>
+     <h2>Account created</h2>
+     <p class="login-sub">${esc(j.message||'Your account is awaiting approval.')}</p>
+     <div class="su-done">
+       <div class="pf-row"><span>Username</span><b>${esc(username)}</b></div>
+       <div class="pf-row"><span>Status</span><b>${esc(j.status||'pending')}</b></div>
+     </div>
+     ${j.verification_token
+       ? `<p class="muted sm">Development mode — no mail server is configured, so the verification token is shown here. In production the school office issues it.</p>
+          <div class="field"><label for="suTok">Verification token</label>
+          <input id="suTok" readonly value="${escAttr(j.verification_token)}"></div>
+          <button class="btn-outline btn-block" type="button" onclick="suVerify()">${icon('shield-check')} Verify my email now</button>`
+       : `<p class="muted sm">You will be able to sign in once the school office approves your account.</p>`}
+     <p id="suMsg" class="login-msg" role="alert"></p>
+     <button class="btn-primary btn-block" type="button" onclick="showLoginCard('staff')">
+       ${icon('arrow-left')} Back to sign in</button>`;
+  paint();
+}
+
+async function suVerify(){
+  const t=$('#suTok'); if(!t || !t.value) return;
+  try{
+    const r=await fetch(BACKEND_URL+'/api/auth/verify-email',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      credentials:'same-origin', body:JSON.stringify({token:t.value})});
+    const j=await r.json().catch(()=>({}));
+    setMsg('#suMsg', (j.message||j.error||'Verification failed.'), !!r.ok);
+    if(r.ok){ t.value=''; }
+  }catch(e){ setMsg('#suMsg','Could not reach the server.'); }
+}
+
+// ---------------------------------------------------------------------------
+// Forgot / reset password (login screen)
+// ---------------------------------------------------------------------------
+let rsStep=1;
+
+function rsReset(){
+  rsStep=1;
+  $('#rsStep2')?.classList.add('hidden');
+  setMsg('#rsMsg','');
+  ['rsToken','rsPass','rsPass2'].forEach(id=>{ const e=document.getElementById(id); if(e) e.value=''; });
+  const b=$('#rsBtn'); if(b) b.textContent='Continue';
+}
+
+async function doResetSubmit(e){
+  if(e) e.preventDefault();
+  setMsg('#rsMsg','');
+  const btn=$('#rsBtn');
+  if(rsStep===1){
+    const ident=($('#rsIdent')?.value||'').trim();
+    if(!ident){ setMsg('#rsMsg','Enter your username or email.'); return; }
+    if(btn){ btn.disabled=true; btn.textContent='Working…'; }
+    try{
+      const r=await fetch(BACKEND_URL+'/api/auth/forgot-password',{
+        method:'POST', headers:{'Content-Type':'application/json'},
+        credentials:'same-origin', body:JSON.stringify({identifier:ident})});
+      const j=await r.json().catch(()=>({}));
+      if(!r.ok){ setMsg('#rsMsg', j.error||'Could not start the reset.'); return; }
+      rsStep=2;
+      $('#rsStep2')?.classList.remove('hidden');
+      if(j.dev_token){
+        const t=$('#rsToken'); if(t) t.value=j.dev_token;
+        setMsg('#rsMsg', (j.message||'')+' (Development mode: the link was filled in for you.)', true);
+      }else{
+        setMsg('#rsMsg', (j.message||'')+' Ask the school office for the link, then paste it below.');
+      }
+      if(btn) btn.textContent='Set new password';
+    }catch(err){
+      setMsg('#rsMsg','Could not reach the server. Please try again.');
+    }finally{ if(btn) btn.disabled=false; }
+    return;
+  }
+  const token=($('#rsToken')?.value||'').trim();
+  const p=$('#rsPass')?.value||'', p2=$('#rsPass2')?.value||'';
+  if(!token){ setMsg('#rsMsg','Paste the reset link or token you were given.'); return; }
+  const pp=pwLocalProblem(p); if(pp){ setMsg('#rsMsg',pp); return; }
+  if(p!==p2){ setMsg('#rsMsg','The two passwords do not match.'); return; }
+  if(btn){ btn.disabled=true; btn.textContent='Saving…'; }
+  try{
+    const r=await fetch(BACKEND_URL+'/api/auth/reset-password',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      credentials:'same-origin', body:JSON.stringify({token, new_password:p, confirm_password:p2})});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok){ setMsg('#rsMsg', j.error||'Could not reset the password.'); return; }
+    const card=$('#resetForm');
+    if(card){
+      card.innerHTML =
+        `<div class="login-role-icon" aria-hidden="true">${icon('circle-check')}</div>
+         <h2>Password updated</h2>
+         <p class="login-sub">${esc(j.message||'You can sign in now.')}</p>
+         <button class="btn-primary btn-block" type="button" onclick="showLoginCard('staff')">
+           ${icon('arrow-left')} Back to sign in</button>`;
+      paint();
+    }
+  }catch(err){
+    setMsg('#rsMsg','Could not reach the server. Please try again.');
+  }finally{ if(btn) btn.disabled=false; }
+}
+
+// ---------------------------------------------------------------------------
+// Profile dashboard
+// ---------------------------------------------------------------------------
+function pfRing(pct){
+  return `<div class="pf-ring" style="--p:${Math.max(0,Math.min(100,pct))}"
+            role="img" aria-label="Profile ${pct}% complete"><span>${pct}%</span></div>`;
+}
+function pfRows(rows){
+  if(!rows.length) return '<p class="muted">Nothing to show yet.</p>';
+  return '<div class="pf-rows">'+rows.map(([k,v])=>
+    `<div class="pf-row"><span>${esc(k)}</span><b>${esc(String(v ?? '—'))}</b></div>`).join('')+'</div>';
+}
+function pfContextCard(ctx, role){
+  const rows=[]; let title='Your role';
+  if(role==='student'){
+    title='My class';
+    if(ctx.student){
+      rows.push(['Class', (ctx.student.class_name||'—')+' · '+(ctx.student.section_name||'—')]);
+      rows.push(['Student ID', ctx.student.student_id||'—']);
+      rows.push(['Attendance this month', ctx.attendance_percent+'%']);
+    }
+  }else if(role==='parent'){
+    title='My children';
+    (ctx.children||[]).forEach(c=>{
+      rows.push([c.name, (c.class_name||'—')+' · '+(c.section_name||'—')]);
+      rows.push(['  attendance', c.attendance_percent+'%']);
+    });
+  }else if(role==='teacher'){
+    title='Teaching';
+    if(ctx.staff_record){
+      rows.push(['Staff record', ctx.staff_record.name||'—']);
+      rows.push(['Subject', ctx.staff_record.subject||'—']);
+    }else{
+      rows.push(['Staff record','Not linked to a teacher profile yet']);
+    }
+    (ctx.assigned_classes||[]).forEach(c=>
+      rows.push(['Assigned class', c.class_name+' · '+c.section_name]));
+  }else if(role==='admin'){
+    title='School overview';
+    rows.push(['School', ctx.school_name||'—']);
+    rows.push(['Accounts', ctx.users_total]);
+    rows.push(['Awaiting approval', ctx.users_pending]);
+  }
+  if(!rows.length) return '';
+  return `<div class="card"><div class="card-head"><h3>${icon('building-2')} ${esc(title)}</h3></div>
+    ${pfRows(rows)}
+    ${role==='admin' && ctx.users_pending>0
+      ? `<button class="btn-outline" onclick="navigate('accountsettings')">${icon('inbox')} Review pending accounts</button>`:''}
+    </div>`;
+}
+
+async function loadProfileView(){
+  const host=$('#profileCard');
+  if(!host) return;
+  host.innerHTML='<div class="card"><p class="muted">Loading profile…</p></div>';
+  try{
+    const d=await api('/api/profile');
+    state.profile=d;
+    const a=d.account||{}, p=d.profile||{}, comp=d.completion||{percent:0,items:[]};
+    const ctx=d.context||{}, role=a.role||state.role||'';
+    const photo=p.photo?('/api/photos/'+encodeURIComponent(p.photo)):'';
+    const cover=p.cover_photo?('/api/photos/'+encodeURIComponent(p.cover_photo)):'';
+    const name=p.display_name||p.full_name||a.username||'';
+
+    const head=`<div class="card pf-head">
+      ${cover?`<div class="pf-cover" style="background-image:url('${escAttr(cover)}')"></div>`:''}
+      <div class="pf-id">
+        <div class="pf-avatar${photo?' has-img':''}"${photo?` style="background-image:url('${escAttr(photo)}')"`:''}>${photo?'':icon('user')}</div>
+        <div class="pf-idtext">
+          <h3>${esc(name)}</h3>
+          <p class="muted">@${esc(a.username)} · User ID ${esc(a.id)}</p>
+          <div class="pf-badges">
+            <span class="badge">${esc(role)}</span>
+            <span class="badge ${a.status==='active'?'P':'A'}">${esc(a.status||'active')}</span>
+            ${a.email_verified?`<span class="badge P">Email verified</span>`:`<span class="badge L">Email unverified</span>`}
+          </div>
+        </div>
+        ${pfRing(comp.percent)}
+      </div>
+      ${comp.percent<100?`<div class="pf-nudge">${icon('zap')}
+        <span>Your profile is ${comp.percent}% complete.</span>
+        <button class="btn-outline" onclick="navigate('onboarding')">Finish setting up</button></div>`:''}
+    </div>`;
+
+    const completion=`<div class="card">
+      <div class="card-head"><h3>${icon('list-checks')} Profile completion</h3></div>
+      <ul class="pf-checks">${(comp.items||[]).map(i=>
+        `<li class="${i.done?'done':''}">${icon(i.done?'circle-check':'circle-help')}
+          <span>${esc(i.label)}</span></li>`).join('')}</ul>
+      <p class="muted sm">Every item here is optional — nothing personal is required to reach 100%.</p>
+    </div>`;
+
+    const actions=`<div class="card">
+      <div class="card-head"><h3>${icon('user')} Account</h3></div>
+      <div class="pf-actions">
+        <button class="btn-primary" onclick="navigate('editprofile')">${icon('pencil')} Edit Profile</button>
+        <button class="btn-outline" onclick="navigate('accountsettings')">${icon('settings')} Account Settings</button>
+        <button class="btn-outline" onclick="navigate('privacy')">${icon('lock')} Privacy</button>
+        <button class="btn-ghost" onclick="logout()">${icon('log-out')} Logout</button>
+      </div>
+    </div>`;
+
+    host.innerHTML=head+completion+(pfContextCard(ctx,role)||'')+actions;
+
+    // Students/parents keep the guardians + school contact block they had
+    // before; it comes from the existing portal endpoint, not a new one.
+    if(role==='student'||role==='parent'){
+      try{
+        const pd=await api('/api/portal/profile'+(childQs()?'?'+childQs().slice(1):''));
+        const sch=pd.school||{}, gs=pd.guardians||[];
+        host.insertAdjacentHTML('beforeend',
+          `<div style="grid-column:1/-1">${childSwitcher()}</div>`+
+          profileCard(pd.student)+
+          `<div class="card"><div class="card-head"><h3>${icon('users')} Guardians</h3></div>
+            <div class="pf-rows">${gs.length?gs.map(g=>
+              `<div class="pf-row"><span>${esc(g.parent_id||'Parent')}</span>
+                <b>${esc(g.name)}${g.phone?' • '+esc(g.phone):''}</b></div>`).join('')
+              :'<p class="muted">No guardian record on file.</p>'}</div>
+            <div class="card-head pf-sub">${icon('building-2')} School contact</div>
+            <div class="pf-rows">
+              <div class="pf-row"><span>School</span><b>${esc(sch.school_name)}</b></div>
+              <div class="pf-row"><span>Address</span><b>${esc(sch.address||'—')}</b></div>
+              <div class="pf-row"><span>Contact</span><b>${esc(sch.contact||'—')}</b></div>
+            </div></div>`);
+      }catch(e){ /* the portal block is supplementary; never break the page */ }
+    }
+  }catch(e){
+    host.innerHTML=`<div class="card"><p class="muted">${esc(e.message||e)}</p>
+      <button class="btn-outline" onclick="navigate('profile')">${icon('refresh-cw')} Try again</button></div>`;
+  }
+  paint();
+}
+
+// ---------------------------------------------------------------------------
+// Edit profile
+// ---------------------------------------------------------------------------
+const EP_EL={full_name:'epFull', display_name:'epDisplay', dob:'epDob', bio:'epBio'};
+const EP_SOCIALS=['instagram','facebook','youtube','linkedin','website','other'];
+
+function epClear(){
+  showFieldErrors({}, EP_EL);
+  const s=document.getElementById('err-epSocials'); if(s) s.textContent='';
+}
+function epCount(){
+  const b=$('#epBio'), c=$('#epBioCount');
+  if(b&&c) c.textContent=b.value.length;
+}
+async function epLoad(){
+  try{
+    const d=await api('/api/profile');
+    state.profile=d;
+    const p=d.profile||{}, s=p.socials||{};
+    const set=(id,v)=>{ const e=document.getElementById(id); if(e) e.value=v??''; };
+    set('epFull',p.full_name); set('epDisplay',p.display_name);
+    set('epDob',p.dob); set('epGender',p.gender); set('epPronouns',p.pronouns);
+    set('epCity',p.city); set('epCountry',p.country);
+    set('epLang',p.language||'English');
+    set('epBio',p.bio); set('epInterests',p.interests);
+    EP_SOCIALS.forEach(k=>set('ep'+k.charAt(0).toUpperCase()+k.slice(1), s[k]));
+    epPhotoCard(); epCount(); epClear();
+  }catch(e){ toast(e.message||'Could not load profile', false); }
+  paint();
+}
+async function epPhotoCard(){
+  const host=$('#epPhotoCard'); if(!host) return;
+  const d=state.profile||await api('/api/profile');
+  const p=d.profile||{};
+  const src=p.photo?('/api/photos/'+encodeURIComponent(p.photo)):'';
+  host.innerHTML=`<div class="card-head"><h3>${icon('camera')} Profile photo</h3></div>
+    <div class="pf-photo-row">
+      <div class="pf-avatar lg${src?' has-img':''}"${src?` style="background-image:url('${escAttr(src)}')"`:''}>${src?'':icon('user')}</div>
+      <div>
+        <p class="muted sm">JPEG, PNG or WebP, up to 2 MB. Images are re-encoded
+          on the server, which also strips location data from the file.</p>
+        <div class="pf-actions">
+          <button class="btn-outline" onclick="epPick('/api/profile/photo')">${icon('camera')} ${src?'Change photo':'Upload photo'}</button>
+          ${src?`<button class="btn-ghost" onclick="epRemove('/api/profile/photo')">${icon('trash-2')} Remove</button>`:''}
+        </div>
+      </div>
+    </div>`;
+  paint();
+}
+function epPick(route){
+  const inp=document.createElement('input');
+  inp.type='file'; inp.accept='image/png,image/jpeg,image/webp';
+  inp.onchange=()=>epUpload(route, inp.files&&inp.files[0]);
+  inp.click();
+}
+async function epUpload(route, file){
+  if(!file) return;
+  if(file.size>2*1024*1024){ toast('Images must be 2 MB or smaller', false); return; }
+  const fd=new FormData(); fd.append('image', file);
+  try{
+    const r=await fetch(BACKEND_URL+route,{method:'POST',credentials:'same-origin',body:fd});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok){ toast(j.error||'Could not upload that image', false); return; }
+    toast('Photo updated');
+    if(typeof epPhotoCard==='function') epPhotoCard();
+    if($('#profileCard')) loadProfileView();
+  }catch(e){ toast('Could not reach the server', false); }
+}
+async function epRemove(route){
+  try{
+    const r=await fetch(BACKEND_URL+route,{method:'DELETE',credentials:'same-origin'});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok){ toast(j.error||'Could not remove the image', false); return; }
+    toast('Image removed');
+    epPhotoCard();
+    if($('#profileCard')) loadProfileView();
+  }catch(e){ toast('Could not reach the server', false); }
+}
+async function epSave(){
+  epClear();
+  const g=id=>(document.getElementById(id)?.value||'').trim();
+  const socials={};
+  EP_SOCIALS.forEach(k=>{ socials[k]=g('ep'+k.charAt(0).toUpperCase()+k.slice(1)); });
+  const local={};
+  if(g('epFull').length<2) local.full_name='Please enter your full name.';
+  if(g('epBio').length>280) local.bio='Keep your bio under 280 characters.';
+  const badSocial=EP_SOCIALS.map(k=>urlLocalProblem(socials[k])).find(Boolean);
+  if(badSocial) local.socials=badSocial;
+  if(Object.keys(local).length){ showFieldErrors(local, EP_EL);
+    const s=document.getElementById('err-epSocials'); if(s) s.textContent=local.socials||''; return; }
+
+  const body={full_name:g('epFull'), display_name:g('epDisplay'), dob:g('epDob'),
+    gender:g('epGender'), pronouns:g('epPronouns'), city:g('epCity'),
+    country:g('epCountry'), language:g('epLang'), bio:g('epBio'),
+    interests:g('epInterests'), socials};
+  const btn=$('#epSaveBtn'); if(btn){ btn.disabled=true; btn.textContent='Saving…'; }
+  try{
+    const d=await api('/api/profile',{method:'PUT',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+    if(d.fields) showFieldErrors(d.fields, EP_EL);
+    setMsg('#epMsg', d.message||'Profile saved.', true);
+    toast('Profile saved');
+    state.profile=null;
+    if($('#profileCard')) loadProfileView();
+  }catch(e){
+    if(e.body && e.body.fields) showFieldErrors(e.body.fields, EP_EL);
+    setMsg('#epMsg', e.message||'Could not save the profile.');
+  }finally{ const b=$('#epSaveBtn'); if(b){ b.disabled=false;
+    b.innerHTML=icon('shield-check')+' Save Changes'; paint(); } }
+}
+
+// ---------------------------------------------------------------------------
+// Account settings
+// ---------------------------------------------------------------------------
+async function asLoad(){
+  try{
+    const d=await api('/api/profile');
+    state.profile=d;
+    const a=d.account||{}, p=d.profile||{};
+    const host=$('#asAccount');
+    if(host){
+      host.innerHTML=`<div class="card-head"><h3>${icon('user')} Sign-in details</h3></div>
+        <div class="grid-2">
+          <div class="field"><label for="asUser">Username</label>
+            <input id="asUser" maxlength="30" value="${escAttr(a.username)}" autocomplete="username">
+            <p class="field-err" id="err-asUser"></p></div>
+          <div class="field"><label for="asEmail">Email address</label>
+            <input id="asEmail" type="email" maxlength="254" value="${escAttr(a.email||'')}" autocomplete="email">
+            <p class="field-err" id="err-asEmail"></p></div>
+          <div class="field"><label for="asPhone">Mobile number</label>
+            <input id="asPhone" type="tel" maxlength="20" value="${escAttr(a.phone||'')}" autocomplete="tel">
+            <p class="field-err" id="err-asPhone"></p></div>
+          <div class="field"><label for="asLang">Preferred language</label>
+            <select id="asLang">${langOpts(p.language||'English')}</select></div>
+        </div>
+        <p class="muted sm">Changing your username changes what you type at the sign-in screen.</p>
+        <button class="btn-primary" id="asSaveBtn" onclick="asSave()">${icon('shield-check')} Save Changes</button>`;
+      paint();
+    }
+    asSessions();
+  }catch(e){ toast(e.message||'Could not load account settings', false); }
+}
+async function asSave(){
+  ['asUser','asEmail','asPhone'].forEach(id=>{
+    const b=document.getElementById('err-'+id); if(b) b.textContent='';
+  });
+  const g=id=>(document.getElementById(id)?.value||'').trim();
+  const body={username:g('asUser'), email:g('asEmail'), phone:g('asPhone'),
+              language:g('asLang')};
+  const local={};
+  if(!/^[A-Za-z0-9][A-Za-z0-9._-]{2,29}$/.test(body.username))
+    local.username='Use 3–30 characters: letters, numbers, dot, dash or underscore.';
+  if(!SU_EMAIL.test(body.email)) local.email='Enter a valid email address.';
+  if(body.phone && !/^\+?\d{7,15}$/.test(body.phone.replace(/[\s()-]/g,'')))
+    local.phone='Enter 7–15 digits, optionally starting with +.';
+  if(Object.keys(local).length){ showFieldErrors(local,{username:'asUser',email:'asEmail',phone:'asPhone'}); return; }
+  const btn=$('#asSaveBtn'); if(btn){ btn.disabled=true; btn.textContent='Saving…'; }
+  try{
+    const d=await api('/api/profile',{method:'PUT',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+    if(d.fields) showFieldErrors(d.fields,{username:'asUser',email:'asEmail',phone:'asPhone'});
+    setMsg('#asMsg', d.message||'Saved.', true);
+    toast('Account updated');
+  }catch(e){
+    if(e.body && e.body.fields)
+      showFieldErrors(e.body.fields,{username:'asUser',email:'asEmail',phone:'asPhone'});
+    setMsg('#asMsg', e.message||'Could not save.');
+  }finally{ const b=$('#asSaveBtn'); if(b){ b.disabled=false;
+    b.innerHTML=icon('shield-check')+' Save Changes'; paint(); } }
+}
+async function asSessions(){
+  const host=$('#asSessions'); if(!host) return;
+  try{
+    const d=await api('/api/profile/sessions');
+    const rows=d.sessions||[];
+    host.innerHTML=rows.length?rows.map(x=>{
+      const t=String(x.time||'').replace('T',' ').slice(0,16);
+      return `<div class="pf-row"><span>${esc(t)}</span>
+        <b class="${x.success?'ok':''}">${x.success?'Successful':'Failed attempt'}</b></div>`;
+    }).join(''):'<p class="muted">No sign-ins recorded yet.</p>';
+  }catch(e){ host.innerHTML='<p class="muted">Sign-in history unavailable.</p>'; }
+}
+async function asLogoutOthers(){
+  const btn=$('#asLogoutOthers'); if(btn){ btn.disabled=true; btn.textContent='Signing out…'; }
+  try{
+    const d=await api('/api/profile/logout-others',{method:'POST'});
+    setMsg('#asMsg', d.message||'Done.', true);
+    toast('Other devices signed out');
+    asSessions();
+  }catch(e){ setMsg('#asMsg', e.message||'Could not sign out other devices.'); }
+  finally{ const b=$('#asLogoutOthers'); if(b){ b.disabled=false;
+    b.innerHTML=icon('log-out')+' Sign out other devices'; paint(); } }
+}
+
+// ---------------------------------------------------------------------------
+// Privacy & preferences
+// ---------------------------------------------------------------------------
+function pvToggle(key,label,on){
+  return `<label class="toggle-row"><span>${esc(label)}</span>
+    <input type="checkbox" data-pvkey="${escAttr(key)}"${on?'checked':''} onchange="pvSave()"></label>`;
+}
+async function pvLoad(){
+  try{
+    const d=await api('/api/profile');
+    state.profile=d;
+    const p=d.profile||{};
+    const vis=$('#pvVisibility');
+    if(vis){
+      vis.innerHTML=`<div class="card-head"><h3>${icon('lock')} Profile visibility</h3></div>
+        <p class="muted sm">A public profile opens only for someone who already
+          knows your exact username — there is no directory and no search — and
+          it never reveals your role, class or attendance.</p>
+        <div class="field"><label for="pvVis">Who can view your profile</label>
+          <select id="pvVis" onchange="pvSave()">
+            <option value="private">Only me (default)</option>
+            <option value="public">Anyone who has my username</option>
+          </select></div>
+        <div class="toggle-list" id="pvShow">
+          ${pvToggle('show_email','Show my email address',p.show_email)}
+          ${pvToggle('show_phone','Show my mobile number',p.show_phone)}
+          ${pvToggle('show_dob','Show my date of birth',p.show_dob)}
+        </div>`;
+      const v=$('#pvVis'); if(v) v.value=p.visibility==='public'?'public':'private';
+      paint();
+    }
+    $('#pvNotify').innerHTML=
+      pvToggle('notify_email','Email notifications',p.notify_email)+
+      pvToggle('notify_app','In-app notifications',p.notify_app)+
+      pvToggle('notify_attendance','Attendance updates',p.notify_attendance)+
+      pvToggle('notify_notices','New notices',p.notify_notices);
+    $('#pvA11y').innerHTML=
+      pvToggle('a11y_large_text','Larger text',p.a11y_large_text)+
+      pvToggle('a11y_reduced_motion','Reduce motion',p.a11y_reduced_motion);
+    const th=$('#pvTheme'); if(th) th.value=p.theme||'light';
+    pvDeleteCard();
+    const admin=$('#pvAdmin');
+    if(d.can && d.can.manage_users) pvAdminList(); else if(admin) admin.classList.add('hidden');
+  }catch(e){ toast(e.message||'Could not load privacy settings', false); }
+  paint();
+}
+async function pvSave(){
+  const body={};
+  document.querySelectorAll('[data-pvkey]').forEach(i=>{ body[i.dataset.pvkey]=i.checked; });
+  const v=$('#pvVis'); if(v) body.visibility=v.value;
+  const t=$('#pvTheme'); if(t) body.theme=t.value;
+  try{
+    const d=await api('/api/profile',{method:'PUT',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+    setMsg('#pvMsg', d.message||'Preferences saved.', true);
+  }catch(e){ setMsg('#pvMsg', e.message||'Could not save preferences.'); }
+}
+async function pvDeleteCard(){
+  const host=$('#pvDelete'); if(!host) return;
+  try{
+    const d=await api('/api/profile/delete-request');
+    if(d.request){
+      const t=String(d.request.created_at||'').replace('T',' ').slice(0,16);
+      host.innerHTML=`<p class="muted">You already have a request pending
+        (sent ${esc(t)}). The school office will review it — nothing has been removed yet.</p>`;
+      return;
+    }
+    host.innerHTML=`<p class="muted sm">This asks the school office to close your
+      login. It never deletes attendance, marks or any other school record, and
+      nothing is removed until an admin approves it.</p>
+      <div class="field"><label for="pvReason">Reason <small class="muted">(optional)</small></label>
+        <textarea id="pvReason" rows="2" maxlength="300"></textarea></div>
+      <div class="field"><label for="pvConfirm">Type <b>DELETE</b> to confirm *</label>
+        <input id="pvConfirm" placeholder="DELETE" autocomplete="off"></div>
+      <button class="btn-red" onclick="pvDeleteRequest()">${icon('trash-2')} Request account deletion</button>`;
+    paint();
+  }catch(e){ host.innerHTML='<p class="muted">Could not load this section.</p>'; }
+}
+async function pvDeleteRequest(){
+  const why=(document.getElementById('pvConfirm')?.value||'').trim();
+  if(why!=='DELETE'){ setMsg('#pvMsg','Type DELETE to confirm the request.'); return; }
+  try{
+    const d=await api('/api/profile/delete-request',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({confirm:why, reason:(document.getElementById('pvReason')?.value||'').trim()})});
+    setMsg('#pvMsg', d.message||'Request sent.', true);
+    toast('Deletion request sent');
+    pvDeleteCard();
+  }catch(e){ setMsg('#pvMsg', e.message||'Could not send the request.'); }
+}
+async function pvAdminList(){
+  const card=$('#pvAdmin'), host=$('#pvAdminList');
+  if(!card||!host) return;
+  card.classList.remove('hidden');
+  try{
+    const rows=await api('/api/account-deletions');
+    const pending=rows.filter(r=>r.status==='pending');
+    host.innerHTML=pending.length?pending.map(r=>
+      `<div class="list-row">
+        <div class="ri">${icon('inbox')}</div>
+        <div class="body"><b>${esc(r.username)}</b>
+          <p>${esc(r.reason||'No reason given')} · ${esc(String(r.created_at||'').replace('T',' ').slice(0,16))}</p></div>
+        <div class="pf-actions">
+          <button class="btn-outline" onclick="pvAdminDecide(${r.id},'rejected')">${icon('circle-x')} Reject</button>
+          <button class="btn-red" onclick="pvAdminDecide(${r.id},'approved')">${icon('trash-2')} Approve</button>
+        </div>
+      </div>`).join(''):'<p class="muted">No pending deletion requests.</p>';
+    paint();
+  }catch(e){ host.innerHTML='<p class="muted">Could not load requests.</p>'; }
+}
+async function pvAdminDecide(id, decision){
+  try{
+    const d=await api('/api/account-deletions',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({id, decision})});
+    setMsg('#pvMsg', 'Request '+(d.status||decision)+'.', true);
+    toast('Request '+decision);
+    pvAdminList();
+  }catch(e){ setMsg('#pvMsg', e.message||'Could not update the request.'); }
+}
+
+// ---------------------------------------------------------------------------
+// Onboarding wizard
+// ---------------------------------------------------------------------------
+const OB_TOTAL=3;
+const OB_TITLES=['Your photo & name','A little about you','Interests & preferences'];
+let obStep=0;
+
+function obLoad(){ obStep=0; obRender(); }
+function obRender(){
+  const d=state.profile||{}, p=d.profile||{}, comp=d.completion||{percent:0,items:[]};
+  const steps=$('#obSteps');
+  if(steps){
+    steps.innerHTML=OB_TITLES.map((t,i)=>
+      `<button type="button" class="ob-step${i===obStep?' active':''}${i<obStep?' done':''}"
+        onclick="obJump(${i})"><span>${i+1}</span>${esc(t)}</button>`).join('');
+  }
+  const src=p.photo?('/api/photos/'+encodeURIComponent(p.photo)):'';
+  const body=$('#obBody');
+  if(!body) return;
+  if(obStep===0){
+    body.innerHTML=`<div class="card-head"><h3>${icon('camera')} Photo &amp; display name</h3></div>
+      <div class="pf-photo-row">
+        <div class="pf-avatar lg${src?' has-img':''}"${src?` style="background-image:url('${escAttr(src)}')"`:''}>${src?'':icon('user')}</div>
+        <div>
+          <div class="pf-actions">
+            <button class="btn-outline" onclick="epPick('/api/profile/photo')">${icon('camera')} ${src?'Change photo':'Upload photo'}</button>
+            ${src?`<button class="btn-ghost" onclick="epRemove('/api/profile/photo').then(obRender)">${icon('trash-2')} Remove</button>`:''}
+          </div>
+          <p class="muted sm">Optional, and it never has to be a real photo of you.</p>
+        </div>
+      </div>
+      <div class="field"><label for="obDisplay">Display name</label>
+        <input id="obDisplay" maxlength="60" value="${escAttr(p.display_name||'')}"
+          placeholder="How you want to appear">
+        <p class="field-err" id="err-obDisplay"></p></div>`;
+  }else if(obStep===1){
+    body.innerHTML=`<div class="card-head"><h3>${icon('pencil')} About you</h3></div>
+      <div class="field"><label for="obBio">Bio</label>
+        <textarea id="obBio" rows="3" maxlength="280"
+          placeholder="A line or two about you">${esc(p.bio||'')}</textarea>
+        <p class="muted sm"><span id="obBioCount">${(p.bio||'').length}</span>/280</p>
+        <p class="field-err" id="err-obBio"></p></div>
+      <div class="field"><label for="obInterests">Interests &amp; hobbies</label>
+        <textarea id="obInterests" rows="2" maxlength="300"
+          placeholder="Chess, cricket, reading…">${esc(p.interests||'')}</textarea></div>`;
+    const b=$('#obBio'); if(b) b.oninput=()=>{ const c=$('#obBioCount'); if(c) c.textContent=b.value.length; };
+  }else{
+    const s=p.socials||{};
+    body.innerHTML=`<div class="card-head"><h3>${icon('send')} One social link &amp; preferences</h3></div>
+      <p class="muted sm">Add a single link — that is all this step needs.</p>
+      <div class="grid-2">
+        <div class="field"><label for="obWebsite">Website or portfolio</label>
+          <input id="obWebsite" type="url" maxlength="200" value="${escAttr(s.website||'')}"
+            placeholder="https://example.com"><p class="field-err" id="err-obWebsite"></p></div>
+        <div class="field"><label for="obLang">Preferred language</label>
+          <select id="obLang">${langOpts(p.language||'English')}</select></div>
+        <div class="field"><label for="obTheme">Theme</label>
+          <select id="obTheme">
+            <option value="light"${p.theme!=='dark'?' selected':''}>Light</option>
+            <option value="dark"${p.theme==='dark'?' selected':''}>Dark</option>
+          </select></div>
+      </div>`;
+  }
+  const bk=$('#obBack'), nx=$('#obNext');
+  if(bk) bk.innerHTML=obStep===0?icon('arrow-left')+' Back to profile':icon('arrow-left')+' Back';
+  if(nx) nx.innerHTML=obStep===OB_TOTAL-1
+    ? 'Finish '+icon('circle-check') : 'Next '+icon('arrow-right');
+  const comp2=state.profile&&state.profile.completion;
+  if(comp2) setMsg('#obMsg','Profile '+comp2.percent+'% complete', comp2.percent===100);
+  paint();
+}
+async function obJump(i){
+  if(i>obStep){ // moving forward still saves what is on screen now
+    const err=await obSave(); if(err) return;
+  }
+  obStep=Math.max(0,Math.min(OB_TOTAL-1,i)); obRender();
+}
+async function obSave(){
+  const body={};
+  if(obStep===0){
+    const v=(document.getElementById('obDisplay')?.value||'').trim();
+    if(v){ body.display_name=v; }
+  }else if(obStep===1){
+    body.bio=(document.getElementById('obBio')?.value||'').trim();
+    body.interests=(document.getElementById('obInterests')?.value||'').trim();
+    if(body.bio.length>280){ showFieldErrors({bio:'Keep your bio under 280 characters.'},{bio:'obBio'}); return true; }
+  }else{
+    const w=(document.getElementById('obWebsite')?.value||'').trim();
+    const bad=urlLocalProblem(w);
+    if(bad){ const e=document.getElementById('err-obWebsite'); if(e) e.textContent=bad; return true; }
+    body.socials={website:w};
+    const l=document.getElementById('obLang'); if(l) body.language=l.value;
+    const t=document.getElementById('obTheme'); if(t) body.theme=t.value;
+  }
+  try{
+    const d=await api('/api/profile',{method:'PUT',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+    if(d.fields){ showFieldErrors(d.fields,{display_name:'obDisplay',bio:'obBio'}); return true; }
+    state.profile=Object.assign({}, state.profile||{}, {profile:d.profile, completion:d.completion});
+    return false;
+  }catch(e){
+    setMsg('#obMsg', e.message||'Could not save this step.');
+    return true;
+  }
+}
+async function obMove(dir){
+  setMsg('#obMsg','');
+  if(dir<0){
+    if(obStep===0){ navigate('profile'); return; }
+    obStep--; obRender(); return;
+  }
+  const err=await obSave(); if(err) return;
+  if(obStep<OB_TOTAL-1){ obStep++; obRender(); return; }
+  toast('Profile setup finished');
+  const d=await api('/api/profile').catch(()=>null);
+  if(d){ state.profile=d; }
+  navigate('profile');
+}
 
 

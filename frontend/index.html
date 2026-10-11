@@ -70,7 +70,7 @@
         <label for="loginPass">Password *</label>
         <div class="pwd-wrap"><input id="loginPass" type="password" placeholder="••••••••" value="admin123" required autocomplete="current-password"><button type="button" onclick="togglePwd()" tabindex="-1" aria-label="Show or hide password"><i data-icon="eye"></i></button></div>
       </div>
-      <div class="login-row"><label class="check"><input type="checkbox" id="rememberMe" checked> Remember Me</label><a href="#" onclick="toast('Contact Admin for reset');return false">Forgot Password?</a></div>
+      <div class="login-row"><label class="check"><input type="checkbox" id="rememberMe" checked> Remember Me</label><a href="#" onclick="forgotPassword('staff');return false">Forgot Password?</a></div>
       <button id="loginBtn" type="submit" class="btn-primary btn-block">Login <i data-icon="arrow-right"></i></button>
       <p class="login-hint">Demo: <b>admin/admin123</b> | <b>teacher/teacher123</b></p>
       <p id="loginMsg" class="login-msg" role="alert"></p>
@@ -78,7 +78,7 @@
         <a href="#" onclick="showLoginCard('student');return false;"><i data-icon="graduation-cap"></i> Student Login</a>
         <a href="#" onclick="showLoginCard('parent');return false;"><i data-icon="users"></i> Parent Login</a>
       </div>
-      <p class="muted sm">Not a member? <a href="#" onclick="toast('Contact Admin for reset');return false">Contact Admin</a></p>
+      <p class="muted sm">Not a member? <a href="#" onclick="showLoginCard('signup');return false">Create an account</a></p>
     </form>
 
     <!-- STUDENT LOGIN -->
@@ -158,6 +158,137 @@
       <div class="login-alt-links">
         <a href="#" onclick="showLoginCard('student');return false;"><i data-icon="graduation-cap"></i> Student Login</a>
         <a href="#" onclick="showLoginCard('staff');return false;"><i data-icon="shield-check"></i> Staff Login</a>
+      </div>
+    </form>
+
+    <!-- SIGN UP -->
+    <form id="signupForm" class="login-card hidden" onsubmit="doSignup(event)" novalidate>
+      <div class="login-tabs" role="tablist" aria-label="Choose account type">
+        <button type="button" onclick="showLoginCard('staff')" aria-selected="false"><i data-icon="shield-check"></i>Staff</button>
+        <button type="button" onclick="showLoginCard('student')" aria-selected="false"><i data-icon="graduation-cap"></i>Student</button>
+        <button type="button" onclick="showLoginCard('parent')" aria-selected="false"><i data-icon="users"></i>Parent</button>
+      </div>
+      <div class="login-role-icon" aria-hidden="true"><i data-icon="user-plus"></i></div>
+      <h2>Create your account</h2>
+      <p class="login-sub">The school office reviews every registration before you can sign in</p>
+      <div class="su-grid">
+        <div class="field">
+          <label for="suName">Full Name *</label>
+          <input id="suName" maxlength="80" autocomplete="name" placeholder="e.g. Priya Sharma">
+          <p class="field-err" id="err-suName" role="alert"></p>
+        </div>
+        <div class="field">
+          <label for="suUser">Username *</label>
+          <input id="suUser" maxlength="30" autocomplete="username" placeholder="3–30 characters">
+          <p class="field-err" id="err-suUser" role="alert"></p>
+        </div>
+        <div class="field">
+          <label for="suEmail">Email Address *</label>
+          <input id="suEmail" type="email" maxlength="254" autocomplete="email" placeholder="you@example.com">
+          <p class="field-err" id="err-suEmail" role="alert"></p>
+        </div>
+        <div class="field">
+          <label for="suPhone">Mobile Number <small class="muted">(optional)</small></label>
+          <input id="suPhone" type="tel" maxlength="20" autocomplete="tel" placeholder="+91 98765 43210">
+          <p class="field-err" id="err-suPhone" role="alert"></p>
+        </div>
+        <div class="field">
+          <label for="suPass">Password *</label>
+          <div class="pwd-wrap">
+            <input id="suPass" type="password" autocomplete="new-password" placeholder="8+ characters, letter and number">
+            <button type="button" onclick="toggleField('suPass')" tabindex="-1" aria-label="Show or hide password"><i data-icon="eye"></i></button>
+          </div>
+          <p class="field-err" id="err-suPass" role="alert"></p>
+        </div>
+        <div class="field">
+          <label for="suPass2">Confirm Password *</label>
+          <div class="pwd-wrap">
+            <input id="suPass2" type="password" autocomplete="new-password">
+            <button type="button" onclick="toggleField('suPass2')" tabindex="-1" aria-label="Show or hide password"><i data-icon="eye"></i></button>
+          </div>
+          <p class="field-err" id="err-suPass2" role="alert"></p>
+        </div>
+        <div class="field">
+          <label for="suDob">Date of Birth <small class="muted">(optional)</small></label>
+          <input id="suDob" type="date">
+          <p class="field-err" id="err-suDob" role="alert"></p>
+        </div>
+        <div class="field">
+          <label for="suLang">Preferred Language *</label>
+          <select id="suLang">
+            <option>English</option>
+            <option>हिन्दी</option>
+            <option>বাংলা</option>
+            <option>தமிழ்</option>
+            <option>తెలుగు</option>
+            <option>मराठी</option>
+            <option>ગુજરાતી</option>
+            <option>ಕನ್ನಡ</option>
+            <option>മലയാളം</option>
+            <option>اردو</option>
+          </select>
+          <p class="field-err" id="err-suLang" role="alert"></p>
+        </div>
+        <div class="field">
+          <label for="suCountry">Country <small class="muted">(optional)</small></label>
+          <input id="suCountry" maxlength="56" autocomplete="country-name" placeholder="e.g. India">
+          <p class="field-err" id="err-suCountry" role="alert"></p>
+        </div>
+      </div>
+      <label class="check su-terms">
+        <input type="checkbox" id="suTerms">
+        <span>I accept the <a href="#" onclick="toast('Terms of Service — ask the school office for a copy');return false;">Terms of Service</a> and <a href="#" onclick="toast('Privacy Policy — ask the school office for a copy');return false;">Privacy Policy</a></span>
+      </label>
+      <p class="field-err" id="err-suTerms" role="alert"></p>
+      <button id="suBtn" type="submit" class="btn-primary btn-block">Create Account <i data-icon="arrow-right"></i></button>
+      <p id="suMsg" class="login-msg" role="alert"></p>
+      <div class="login-alt-links">
+        <a href="#" onclick="showLoginCard('staff');return false;"><i data-icon="shield-check"></i> Back to sign in</a>
+        <a href="#" onclick="showLoginCard('reset');return false;"><i data-icon="key-round"></i> Forgot password</a>
+      </div>
+    </form>
+
+    <!-- RESET PASSWORD -->
+    <form id="resetForm" class="login-card hidden" onsubmit="doResetSubmit(event)" novalidate>
+      <div class="login-tabs" role="tablist" aria-label="Choose account type">
+        <button type="button" onclick="showLoginCard('staff')" aria-selected="false"><i data-icon="shield-check"></i>Staff</button>
+        <button type="button" onclick="showLoginCard('student')" aria-selected="false"><i data-icon="graduation-cap"></i>Student</button>
+        <button type="button" onclick="showLoginCard('parent')" aria-selected="false"><i data-icon="users"></i>Parent</button>
+      </div>
+      <div class="login-role-icon" aria-hidden="true"><i data-icon="key-round"></i></div>
+      <h2>Reset Password</h2>
+      <p class="login-sub">Step 1 — request a reset link for your account</p>
+      <div class="field">
+        <label for="rsIdent">Username or Email *</label>
+        <input id="rsIdent" autocomplete="username" placeholder="e.g. admin">
+      </div>
+      <div id="rsStep2" class="hidden">
+        <p class="muted sm">Step 2 — paste the reset link you were given, then choose a new password.</p>
+        <div class="field">
+          <label for="rsToken">Reset Link / Token *</label>
+          <input id="rsToken" autocomplete="off" placeholder="Paste the reset link or token">
+        </div>
+        <div class="field">
+          <label for="rsPass">New Password *</label>
+          <div class="pwd-wrap">
+            <input id="rsPass" type="password" autocomplete="new-password" placeholder="8+ characters, letter and number">
+            <button type="button" onclick="toggleField('rsPass')" tabindex="-1" aria-label="Show or hide password"><i data-icon="eye"></i></button>
+          </div>
+        </div>
+        <div class="field">
+          <label for="rsPass2">Confirm New Password *</label>
+          <div class="pwd-wrap">
+            <input id="rsPass2" type="password" autocomplete="new-password">
+            <button type="button" onclick="toggleField('rsPass2')" tabindex="-1" aria-label="Show or hide password"><i data-icon="eye"></i></button>
+          </div>
+        </div>
+      </div>
+      <p id="rsMsg" class="login-msg" role="alert"></p>
+      <button id="rsBtn" type="submit" class="btn-primary btn-block">Continue <i data-icon="arrow-right"></i></button>
+      <p class="login-hint muted">This server sends no email, so a link is issued by the school office (or returned here in development).</p>
+      <div class="login-alt-links">
+        <a href="#" onclick="showLoginCard('staff');return false;"><i data-icon="shield-check"></i> Back to sign in</a>
+        <a href="#" onclick="showLoginCard('signup');return false;"><i data-icon="user-plus"></i> Create account</a>
       </div>
     </form>
   </div>
@@ -893,6 +1024,160 @@
               <button type="button" onclick="toggleField('confPw')" aria-label="Show or hide password" tabindex="-1"><i data-icon="eye"></i></button></div></div>
           <p id="pwMsg" class="login-msg" role="alert"></p>
           <button class="btn-primary btn-block" onclick="changePassword()"><i data-icon="shield-check"></i> Update Password</button>
+        </div>
+      </section>
+
+      <!-- EDIT PROFILE -->
+      <section class="view" id="view-editprofile">
+        <div class="page-head"><div>
+          <h2>Edit Profile</h2>
+          <p class="muted">Update how you appear across Dynamic CuroBase</p>
+        </div></div>
+
+        <div id="epPhotoCard" class="card"></div>
+
+        <div class="card">
+          <div class="card-head"><h3><i data-icon="user"></i> About you</h3></div>
+          <div class="grid-2">
+            <div class="field"><label for="epFull">Full Name *</label>
+              <input id="epFull" maxlength="80" autocomplete="name">
+              <p class="field-err" id="err-epFull" role="alert"></p></div>
+            <div class="field"><label for="epDisplay">Display Name <small class="muted">(optional)</small></label>
+              <input id="epDisplay" maxlength="60">
+              <p class="field-err" id="err-epDisplay" role="alert"></p></div>
+            <div class="field"><label for="epDob">Date of Birth</label>
+              <input id="epDob" type="date">
+              <p class="field-err" id="err-epDob" role="alert"></p></div>
+            <div class="field"><label for="epGender">Gender <small class="muted">(optional)</small></label>
+              <select id="epGender">
+                <option value="">Prefer not to say</option>
+                <option>Female</option><option>Male</option>
+                <option>Non-binary</option><option>Other</option>
+              </select></div>
+            <div class="field"><label for="epPronouns">Pronouns <small class="muted">(optional)</small></label>
+              <input id="epPronouns" maxlength="32" placeholder="e.g. she/her"></div>
+            <div class="field"><label for="epCity">City</label>
+              <input id="epCity" maxlength="56" autocomplete="address-level2"></div>
+            <div class="field"><label for="epCountry">Country</label>
+              <input id="epCountry" maxlength="56" autocomplete="country-name"></div>
+            <div class="field"><label for="epLang">Preferred Language</label>
+              <select id="epLang">
+                <option>English</option><option>हिन्दी</option><option>বাংলা</option>
+                <option>தமிழ்</option><option>తెలుగు</option><option>मराठी</option>
+                <option>ગુજરાતી</option><option>ಕನ್ನಡ</option><option>മലയാളം</option>
+                <option>اردو</option>
+              </select></div>
+          </div>
+          <div class="field">
+            <label for="epBio">Bio <small class="muted">(280 characters max)</small></label>
+            <textarea id="epBio" rows="3" maxlength="280" placeholder="A line or two about you"></textarea>
+            <p class="muted sm"><span id="epBioCount">0</span>/280</p>
+            <p class="field-err" id="err-epBio" role="alert"></p>
+          </div>
+          <div class="field">
+            <label for="epInterests">Interests &amp; Hobbies</label>
+            <textarea id="epInterests" rows="2" maxlength="300" placeholder="Chess, cricket, reading…"></textarea>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3><i data-icon="send"></i> Social links</h3></div>
+          <p class="muted sm">Every field here is optional — skip anything you would rather not share. Links must start with http:// or https://.</p>
+          <div class="grid-2">
+            <div class="field"><label for="epInstagram">Instagram</label>
+              <input id="epInstagram" type="url" maxlength="200" placeholder="https://instagram.com/username"></div>
+            <div class="field"><label for="epFacebook">Facebook</label>
+              <input id="epFacebook" type="url" maxlength="200" placeholder="https://facebook.com/username"></div>
+            <div class="field"><label for="epYoutube">YouTube</label>
+              <input id="epYoutube" type="url" maxlength="200" placeholder="https://youtube.com/@channel"></div>
+            <div class="field"><label for="epLinkedin">LinkedIn</label>
+              <input id="epLinkedin" type="url" maxlength="200" placeholder="https://linkedin.com/in/username"></div>
+            <div class="field"><label for="epWebsite">Website / Portfolio</label>
+              <input id="epWebsite" type="url" maxlength="200" placeholder="https://example.com"></div>
+            <div class="field"><label for="epOther">Other link</label>
+              <input id="epOther" type="url" maxlength="200" placeholder="https://"></div>
+          </div>
+          <p class="field-err" id="err-epSocials" role="alert"></p>
+        </div>
+
+        <p id="epMsg" class="form-msg" role="status"></p>
+        <div class="ep-actions">
+          <button class="btn-primary" id="epSaveBtn" onclick="epSave()"><i data-icon="shield-check"></i> Save Changes</button>
+          <button class="btn-outline" onclick="navigate('profile')">Cancel</button>
+        </div>
+      </section>
+
+      <!-- ACCOUNT SETTINGS -->
+      <section class="view" id="view-accountsettings">
+        <div class="page-head"><div>
+          <h2>Account Settings</h2>
+          <p class="muted">Sign-in details, password and active devices</p>
+        </div></div>
+        <div id="asAccount" class="card"></div>
+        <div class="card">
+          <div class="card-head"><h3><i data-icon="key-round"></i> Password</h3></div>
+          <p class="muted sm">Changing your password asks for the current one and signs you in again.</p>
+          <button class="btn-outline" onclick="navigate('password')"><i data-icon="key-round"></i> Change Password</button>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3><i data-icon="refresh-cw"></i> Active devices</h3></div>
+          <div id="asSessions" class="pf-rows"><p class="muted">Loading…</p></div>
+          <p class="muted sm">Signing out other devices keeps you signed in here and invalidates every other cookie.</p>
+          <button class="btn-outline" id="asLogoutOthers" onclick="asLogoutOthers()">
+            <i data-icon="log-out"></i> Sign out other devices</button>
+          <p id="asMsg" class="form-msg" role="status"></p>
+        </div>
+      </section>
+
+      <!-- PRIVACY SETTINGS -->
+      <section class="view" id="view-privacy">
+        <div class="page-head"><div>
+          <h2>Privacy &amp; Preferences</h2>
+          <p class="muted">Choose what others can see and what we tell you about</p>
+        </div></div>
+        <div id="pvVisibility" class="card"></div>
+        <div class="card">
+          <div class="card-head"><h3><i data-icon="bell"></i> Notifications</h3></div>
+          <div id="pvNotify" class="toggle-list"></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3><i data-icon="eye"></i> Accessibility &amp; appearance</h3></div>
+          <div id="pvA11y" class="toggle-list"></div>
+          <div class="field" style="margin-top:12px">
+            <label for="pvTheme">Theme</label>
+            <select id="pvTheme" onchange="pvSave()">
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+              <option value="system">Match my device</option>
+            </select>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3><i data-icon="trash-2"></i> Delete account</h3></div>
+          <div id="pvDelete"></div>
+        </div>
+        <div id="pvAdmin" class="card hidden">
+          <div class="card-head"><h3><i data-icon="inbox"></i> Deletion requests</h3></div>
+          <div id="pvAdminList"><p class="muted">Loading…</p></div>
+        </div>
+        <p id="pvMsg" class="form-msg" role="status"></p>
+      </section>
+
+      <!-- PROFILE ONBOARDING -->
+      <section class="view" id="view-onboarding">
+        <div class="page-head"><div>
+          <h2>Complete Your Profile</h2>
+          <p class="muted">Three quick steps — you can skip any of them and finish later</p>
+        </div></div>
+        <div id="obSteps" class="ob-steps"></div>
+        <div class="card">
+          <div id="obBody"></div>
+          <p id="obMsg" class="form-msg" role="status"></p>
+          <div class="ep-actions">
+            <button class="btn-outline" id="obBack" onclick="obMove(-1)"><i data-icon="arrow-left"></i> Back</button>
+            <button class="btn-outline" onclick="navigate('profile')">Skip for now</button>
+            <button class="btn-primary" id="obNext" onclick="obMove(1)">Next <i data-icon="arrow-right"></i></button>
+          </div>
         </div>
       </section>
 

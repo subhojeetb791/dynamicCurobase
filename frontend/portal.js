@@ -28,12 +28,17 @@ function esc(v){
 const LOGIN_CARDS = {
   staff:   '#loginForm',
   student: '#studentLoginForm',
-  parent:  '#parentLoginForm'
+  parent:  '#parentLoginForm',
+  signup:  '#signupForm',
+  reset:   '#resetForm'
 };
+// Only these three are actual sign-in modes; signup/reset are pre-auth pages.
+const ROLE_LOGIN_MODES = ['staff', 'student', 'parent'];
 
 function showLoginCard(mode){
   if (!LOGIN_CARDS[mode]) mode = 'staff';
-  portal.mode = mode;
+  // logout() returns to portal.mode, so never let it become 'signup'/'reset'.
+  portal.mode = ROLE_LOGIN_MODES.includes(mode) ? mode : 'staff';
   Object.keys(LOGIN_CARDS).forEach(k => {
     const el = q(LOGIN_CARDS[k]);
     if (el) el.classList.toggle('hidden', k !== mode);
@@ -43,7 +48,8 @@ function showLoginCard(mode){
     history.replaceState(null, '', url);
   } catch (e) {}
   restoreRemember();
-  const focus = { staff: '#loginUser', student: '#stIdent', parent: '#parIdent' }[mode];
+  const focus = { staff: '#loginUser', student: '#stIdent', parent: '#parIdent',
+                  signup: '#suName', reset: '#rsIdent' }[mode];
   const f = q(focus);
   if (f) setTimeout(() => f.focus(), 60);
 }
@@ -76,10 +82,12 @@ function toggleStPwd(){ toggleField('stPass'); }
 function toggleParPwd(){ toggleField('parPass'); }
 
 function forgotPassword(mode){
-  const who = mode === 'student' ? 'your class teacher' : 'the school office';
-  const t = (typeof toast === 'function') ? toast : (m => alert(m));
-  t('Please contact ' + who + ' to reset your ' +
-    (mode === 'parent' ? 'Parent ID password / PIN.' : 'password.'));
+  // Open the real reset flow instead of just telling the user to find someone.
+  showLoginCard('reset');
+  rsReset();
+  const src = { student: '#stIdent', parent: '#parIdent', staff: '#loginUser' }[mode];
+  const el = q('#rsIdent'), from = src ? q(src) : null;
+  if (el && from && from.value) el.value = from.value;
 }
 
 function loginError(sel, message){
@@ -590,52 +598,9 @@ async function loadExamReport(){
 }
 
 /* ---------------- profile view ---------------- */
-async function loadProfileView(){
-  const host = q('#profileCard');
-  if (!host) return;
-  host.innerHTML = '<div class="card">Loading profile…</div>';
-  try {
-    if (!portal.me) await loadPortalMe();
-    const isStaff = ['admin', 'teacher'].includes(state.role);
-    if (isStaff){
-      const u = state.currentUser;
-      host.innerHTML =
-        '<div class="card"><div class="card-head"><h3>' + icon('user') + ' Account</h3></div>' +
-        '<div class="pf-rows">' +
-        '<div class="pf-row"><span>Username</span><b>' + esc(u.username) + '</b></div>' +
-        '<div class="pf-row"><span>Role</span><b>' + esc(u.role) + '</b></div>' +
-        '<div class="pf-row"><span>User ID</span><b>' + esc(u.id) + '</b></div>' +
-        '</div><div class="pf-actions">' +
-        '<button class="btn-outline" type="button" onclick="navigate(\'password\')">' +
-          icon('key-round') + ' Change Password</button>' +
-        '<button class="btn-ghost" type="button" onclick="logout()">' +
-          icon('log-out') + ' Logout</button></div></div>' +
-        '<div class="card"><div class="card-head"><h3>' + icon('building-2') + ' School</h3></div>' +
-        '<div class="pf-rows">' +
-        '<div class="pf-row"><span>Session</span><b>2026–27</b></div>' +
-        '<div class="pf-row"><span>Support</span><b>Contact the admin</b></div></div></div>';
-      return;
-    }
-    const data = await api('/api/portal/profile' + (childQs() ? '?' + childQs().slice(1) : ''));
-    const sch = data.school || {};
-    const guardians = data.guardians || [];
-    host.innerHTML =
-      '<div style="grid-column:1/-1">' + childSwitcher() + '</div>' +
-      profileCard(data.student) +
-      '<div class="card"><div class="card-head"><h3>' + icon('users') + ' Guardians</h3></div><div class="pf-rows">' +
-      (guardians.length ? guardians.map(g =>
-        '<div class="pf-row"><span>' + esc(g.parent_id || 'Parent') + '</span><b>' +
-        esc(g.name) + (g.phone ? ' • ' + esc(g.phone) : '') + '</b></div>').join('')
-        : '<p class="muted">No guardian record on file.</p>') +
-      '</div><div class="card-head pf-sub">' + icon('building-2') + ' School contact</div><div class="pf-rows">' +
-      '<div class="pf-row"><span>School</span><b>' + esc(sch.school_name) + '</b></div>' +
-      '<div class="pf-row"><span>Address</span><b>' + esc(sch.address || '—') + '</b></div>' +
-      '<div class="pf-row"><span>Contact</span><b>' + esc(sch.contact || '—') + '</b></div>' +
-      '</div></div>';
-  } catch (e){
-    host.innerHTML = '<div class="card"><p class="muted">' + esc(e.message) + '</p></div>';
-  }
-}
+// loadProfileView() now lives in app.js alongside the rest of the profile
+// module (edit profile, account settings, privacy, onboarding), so the
+// dashboard can share one /api/profile payload across all of them.
 
 /* ---------------- change password ---------------- */
 function loadPasswordView(){

@@ -1110,3 +1110,122 @@ tr:hover td{background:#f8fafc}
   body{background:#fff}
 }
 
+/* ---------- 17. Profile, registration & account pages ---------- */
+
+/* --- auth cards: sign up / reset are far taller than a login form --- */
+#signupForm,#resetForm{max-height:calc(100vh - 36px);overflow-y:auto;overscroll-behavior:contain}
+.su-grid{display:grid;grid-template-columns:1fr;gap:0 14px;text-align:left}
+.su-terms{align-items:flex-start;margin-top:8px;font-size:13px;line-height:1.45}
+.su-terms input{margin-top:2px}
+.su-terms a{color:var(--blue-700);font-weight:600}
+.su-done{border-top:1px solid var(--border);border-bottom:1px solid var(--border);
+  padding:6px 0;margin:6px 0 14px;text-align:left}
+.login-msg.ok{color:var(--green-700);font-weight:600}
+.login-hint{text-align:left;line-height:1.5}
+.field .field-err{margin-top:-2px}
+@media(min-width:620px){.su-grid{grid-template-columns:1fr 1fr}}
+
+/* --- inline validation + status messages --- */
+.field-err{margin:0;font-size:11.5px;line-height:1.4;color:var(--red-700);font-weight:700}
+.field-err:empty{display:none}
+input.invalid,select.invalid,textarea.invalid{border-color:var(--red)!important;
+  box-shadow:0 0 0 3px rgba(220,38,38,.14)}
+.form-msg{min-height:18px;margin:12px 0 0;font-size:13px;font-weight:700;color:var(--red-700)}
+.form-msg.ok{color:var(--green-700)}
+.form-msg:empty{display:none}
+
+/* --- profile dashboard --- */
+.pf-head{position:relative;overflow:hidden}
+.pf-cover{height:104px;background-size:cover;background-position:center;
+  margin:-16px -16px 14px;border-radius:var(--radius) var(--radius) 0 0}
+.pf-id{display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+.pf-avatar{width:66px;height:66px;border-radius:50%;flex:none;display:grid;place-items:center;
+  background:var(--grad-soft);background-size:cover;background-position:center;
+  color:var(--blue-700);border:3px solid var(--card);box-shadow:0 0 0 1px var(--border)}
+.pf-avatar .ic{width:27px;height:27px}
+.pf-avatar.lg{width:84px;height:84px}
+.pf-avatar.lg .ic{width:34px;height:34px}
+.pf-avatar.has-img{background-color:#eef2f7}
+.pf-idtext{flex:1;min-width:180px}
+.pf-idtext h3{margin:0 0 3px;font-size:19px}
+.pf-idtext p{margin:0 0 7px;font-size:13px}
+.pf-badges{display:flex;gap:6px;flex-wrap:wrap}
+.pf-badges .badge{background:var(--blue-50);color:var(--blue-700);text-transform:capitalize}
+.pf-ring{position:relative;width:84px;height:84px;border-radius:50%;flex:none;display:grid;
+  place-items:center;background:conic-gradient(var(--blue) calc(var(--p,0)*1%),#e8eef7 0)}
+.pf-ring::after{content:"";position:absolute;inset:9px;border-radius:50%;background:var(--card)}
+.pf-ring span{position:relative;font-weight:800;font-size:15px;color:var(--blue-700)}
+.pf-nudge{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:14px;padding:10px 12px;
+  background:var(--blue-50);border:1px solid var(--blue-100);border-radius:var(--radius-sm);
+  font-size:13px}
+.pf-nudge .ic{width:17px;height:17px;color:var(--blue-700);flex:none}
+.pf-nudge span{flex:1;min-width:140px}
+.pf-nudge button{flex:none;white-space:nowrap}
+
+/* --- labelled key/value rows --- */
+.pf-rows{display:flex;flex-direction:column}
+.pf-row{display:flex;gap:12px;justify-content:space-between;align-items:baseline;
+  padding:9px 0;border-bottom:1px dashed var(--border);font-size:13.5px}
+.pf-row:last-child{border-bottom:0}
+.pf-row span{color:var(--muted);flex:none;max-width:52%}
+.pf-row b{text-align:right;word-break:break-word}
+.pf-row b.ok{color:var(--green-700)}
+.card-head.pf-sub{justify-content:flex-start;gap:6px;margin-top:16px;padding-top:12px;
+  border-top:1px solid var(--border);color:var(--muted);font-size:12.5px;font-weight:600}
+.card-head.pf-sub .ic{width:15px;height:15px}
+
+/* --- completion checklist --- */
+.pf-checks{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.pf-checks li{display:flex;gap:9px;align-items:center;font-size:13.5px;color:var(--muted)}
+.pf-checks li .ic{width:17px;height:17px;flex:none;color:var(--muted)}
+.pf-checks li.done{color:var(--text);font-weight:700}
+.pf-checks li.done .ic{color:var(--green)}
+
+/* --- photo card --- */
+.pf-photo-row{display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap}
+.pf-photo-row>div:last-child{flex:1;min-width:200px}
+.pf-photo-row .pf-actions{margin-top:8px}
+.pf-photo-row .pf-actions button{flex:0 1 auto}
+
+/* --- preference switches --- */
+.toggle-list{display:flex;flex-direction:column}
+.toggle-row{display:flex;gap:14px;align-items:center;justify-content:space-between;
+  padding:11px 0;border-bottom:1px dashed var(--border);font-size:13.5px;cursor:pointer}
+.toggle-row:last-child{border-bottom:0}
+.toggle-row input[type=checkbox]{width:19px;height:19px;accent-color:var(--blue);flex:none;cursor:pointer}
+
+/* --- onboarding wizard --- */
+.ob-steps{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+.ob-step{display:flex;gap:8px;align-items:center;border:1px solid var(--border);background:var(--card);
+  border-radius:999px;padding:7px 13px;font-size:12.5px;font-weight:700;color:var(--muted);cursor:pointer}
+.ob-step span{width:20px;height:20px;border-radius:50%;background:var(--border);color:var(--text);
+  display:grid;place-items:center;font-size:11px;flex:none}
+.ob-step.active{border-color:var(--blue);color:var(--blue-700);background:var(--blue-50)}
+.ob-step.active span{background:var(--blue);color:#fff}
+.ob-step.done span{background:var(--green-100);color:var(--green-700)}
+
+/* --- form footer buttons --- */
+.ep-actions{display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end;
+  align-items:center;margin-top:6px}
+
+/* --- .btn-ghost is designed for the dark sidebar; keep it legible on cards --- */
+.card .btn-ghost{background:transparent;color:var(--muted);border:1px solid var(--border)}
+.card .btn-ghost:hover{background:var(--blue-50);color:var(--blue-700);border-color:var(--blue-100)}
+
+@media(min-width:760px){.su-grid{grid-template-columns:1fr 1fr}}
+@media(max-width:620px){.ep-actions{justify-content:stretch}
+  .ep-actions button{flex:1 1 auto}}
+@media(max-width:479px){
+  .pf-id{gap:12px}
+  .pf-ring{width:64px;height:64px}
+  .pf-ring span{font-size:13px}
+  .pf-cover{height:76px;margin:-14px -14px 12px}
+  .ob-step{flex:1 1 100%;justify-content:flex-start}
+  .ep-actions{flex-direction:column-reverse}
+  .ep-actions button{width:100%;flex:none}
+}
+@media print{
+  .pf-actions,.ep-actions,.ob-steps,.toggle-row input,.pf-nudge,#pvAdmin,
+  #signupForm,#resetForm,#loginScreen{display:none!important}
+}
+

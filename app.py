@@ -1,4 +1,4 @@
-import os, sqlite3, hashlib, hmac, secrets, datetime, json, io, base64, re, functools
+import os, sqlite3, hashlib, hmac, secrets, datetime, json, io, base64, re, functools, unicodedata
 from flask import Flask, request, jsonify, send_from_directory, g, send_file, session
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
@@ -8,9 +8,20 @@ DATA_DIR = os.path.join(APP_DIR, "data")
 PHOTO_DIR = os.path.join(DATA_DIR, "photos")
 QR_DIR = os.path.join(DATA_DIR, "qrcodes")
 DB_PATH = os.path.join(DATA_DIR, "attendance.db")
+# Profile images are permanent user data, so on a platform with an ephemeral
+# filesystem (Render's root disk is wiped on every deploy) point
+# PROFILE_UPLOAD_DIR at a mounted persistent disk. Defaults to data/photos so
+# local dev and existing student photos behave exactly as before.
+PROFILE_UPLOAD_DIR = os.environ.get('PROFILE_UPLOAD_DIR') or PHOTO_DIR
 
 for d in [DATA_DIR, PHOTO_DIR, QR_DIR]:
     os.makedirs(d, exist_ok=True)
+# The upload dir may be a persistent disk that only exists once mounted on the
+# hosting platform, so a failure here is tolerated and retried on first upload.
+try:
+    os.makedirs(PROFILE_UPLOAD_DIR, exist_ok=True)
+except OSError:
+    pass
 
 app = Flask(__name__, static_folder='frontend', static_url_path='')
 _allowed = [o.strip() for o in os.environ.get('ALLOWED_ORIGINS', '').split(',') if o.strip()]
@@ -887,6 +898,37 @@ def init_db():
              WHERE NOT EXISTS (SELECT 1 FROM user_profiles p WHERE p.user_id = users.id)
         """, (datetime.datetime.now().isoformat(), datetime.datetime.now().isoformat()))
     except Exception: pass
+    # --- Profile system (additive, safe to re-run, never drops anything) ---
+    # display_name is the optional "how I appear" name; this is the real one.
+    try:
+        db.execute("ALTER TABLE user_profiles ADD COLUMN full_name TEXT DEFAULT ''")
+    except Exception: pass
+    # Account deletion is a *request*, never an instant self-serve wipe: an admin
+    # still has to decide it, and attendance/school records are never deleted here.
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS account_deletion_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            reason TEXT DEFAULT '',
+            status TEXT DEFAULT 'pending' CHECK(status IN ('pending','approved','rejected')),
+            created_at TEXT,
+            decided_by INTEGER,
+            decided_at TEXT,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+    """)
+    db.execute("CREATE INDEX IF NOT EXISTS ix_prt_hash ON password_reset_tokens(token_hash)")
+    # Only one *live* token per user per kind: issuing a new link retires the old one.
+    # Retire any pre-existing duplicates first so the index always builds.
+    try:
+        db.execute("""UPDATE password_reset_tokens SET used=1
+                        WHERE used=0 AND id NOT IN
+                              (SELECT MAX(id) FROM password_reset_tokens
+                                WHERE used=0 GROUP BY user_id, kind)""")
+        db.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_prt_live"
+                   " ON password_reset_tokens(user_id, kind) WHERE used=0")
+    except Exception:
+        pass
 
     db.commit()
     db.close()
@@ -1135,6 +1177,13 @@ PUBLIC_API_ANY = (
     '/api/auth/parent-login',
     '/api/auth/check',
     '/api/auth/logout',
+    # Self-service account creation + email verification + password recovery.
+    # These are deliberately unauthenticated, but each one is rate-limited by IP
+    # and none of them ever returns whether an address is registered.
+    '/api/auth/register',
+    '/api/auth/verify-email',
+    '/api/auth/forgot-password',
+    '/api/auth/reset-password',
 )
 PUBLIC_API_GET = (
     '/api/settings',      # school name + logo shown on the login screens
@@ -1148,6 +1197,10 @@ PUBLIC_API_GET = (
     '/api/health',        # render.yaml healthCheckPath: must answer without a
                           # session or the hosting platform can never pass it.
                           # Returns only ok/status + database connectivity.
+    # A single, exact-username lookup that only ever answers for profiles the
+    # owner explicitly set to 'public'. There is no directory, listing or search
+    # endpoint, so student profiles are not publicly discoverable.
+    '/api/profile/public',
 )
 
 @app.before_request
@@ -1462,6 +1515,13 @@ def qr_api(sid):
 
 @app.route('/api/photos/<fn>')
 def photo_api(fn):
+    # Profile photos may sit on a persistent disk (PROFILE_UPLOAD_DIR) while
+    # student photos stay in data/photos; serve whichever directory holds it.
+    # <fn> is a single path segment and send_from_directory rejects traversal.
+    if PROFILE_UPLOAD_DIR != PHOTO_DIR:
+        alt = os.path.join(PROFILE_UPLOAD_DIR, fn)
+        if os.path.isfile(alt):
+            return send_from_directory(PROFILE_UPLOAD_DIR, fn)
     return send_from_directory(PHOTO_DIR, fn)
 
 # ---------- Attendance ----------
@@ -2274,41 +2334,987 @@ def change_password():
     d = request.get_json() or {}
     cur = d.get('current_password') or ''
     new = d.get('new_password') or ''
-    if len(new) < 6:
-        return jsonify({"error":"New password must be at least 6 characters"}), 400
     db = get_db()
     row = db.execute("SELECT password_hash FROM users WHERE id=?", (u['id'],)).fetchone()
     if not row or not verify_pw(row['password_hash'], cur):
         return jsonify({"error":"Current password is incorrect"}), 403
-    db.execute("UPDATE users SET password_hash=? WHERE id=?", (hash_pw(new), u['id']))
+    # The policy is only evaluated once the caller has proved they own the
+    # account, so someone who cannot change the password never gets told the
+    # rules. auth_epoch is deliberately left alone here: the user already has
+    # an explicit "sign out other devices" control, and the unauthenticated
+    # reset flow below is what bumps it.
+    msg = _pw_policy(new)
+    if msg:
+        return jsonify({"error": msg}), 400
+    if new == cur:
+        return jsonify({"error":"New password must be different from the current one"}), 400
+    db.execute("UPDATE users SET password_hash=?, updated_at=? WHERE id=?",
+               (hash_pw(new), now_iso(), u['id']))
     if u['role'] == 'parent':
         try: db.execute("UPDATE parents SET password_hash=? WHERE user_id=?", (hash_pw(new), u['id']))
         except Exception: pass
     db.commit()
     return jsonify({"ok":True, "message":"Password updated"})
 
-@app.route('/api/users', methods=['GET','POST','DELETE'])
+# ===================== Sign-up, profiles & recovery =====================
+#
+# Rules everything below obeys:
+#   * a password is only ever hashed (hash_pw/verify_pw) and is never logged,
+#     echoed back, or included in any error message
+#   * tokens are stored as SHA-256 of the token, so a database dump cannot be
+#     replayed as a reset/verify link
+#   * every write goes through an explicit allowlist -> no mass assignment
+#   * a self-registered account starts 'pending' and can never open a session,
+#     so public sign-up cannot mint an admin/teacher/parent/student account
+
+_UPLOAD_PREFIX = 'pf'
+_IMG_MAX = 2 * 1024 * 1024          # 2 MB, same ceiling the school logo uses
+_IMG_EXTS = ('.jpg', '.png', '.webp')
+
+# --- Password policy (applied only when a NEW password is chosen) ----------
+_PW_MIN = 8
+_PW_COMMON = {'password1', 'qwerty123', 'letmein123', 'welcome123',
+              'abc12345', 'iloveyou1', 'password12'}
+
+def pw_problems(p):
+    """The requirements `p` fails. An empty list means acceptable."""
+    p = p or ''
+    bad = []
+    if len(p) < _PW_MIN:
+        bad.append("at least %d characters" % _PW_MIN)
+    if not re.search(r'[A-Za-z]', p):
+        bad.append("a letter")
+    if not re.search(r'\d', p):
+        bad.append("a number")
+    if p.lower() in _PW_COMMON:
+        bad.append("a less common phrase")
+    return bad
+
+def _pw_policy(p):
+    bad = pw_problems(p)
+    return ("Password must have " + ", ".join(bad) + ".") if bad else None
+
+_USERNAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{2,29}$')
+_EMAIL_RE = re.compile(r'^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,24}$')
+
+def _clean_text(v, limit):
+    return str(v or '').strip()[:limit]
+
+def _valid_dob(s):
+    s = str(s or '').strip()
+    if not s:
+        return True
+    try:
+        d = datetime.date.fromisoformat(s)
+    except ValueError:
+        return False
+    today = datetime.date.today()
+    return d <= today and d.year >= today.year - 120
+
+def _valid_language(v):
+    """Is this a plausible language name, in any script?
+
+    A regex of \\w cannot do this: Python's \\w is built from str.isalnum(), and
+    Devanagari/Bengali/Arabic are assembled from *combining marks* (the vowel
+    signs and viramas) that are category Mn, not alnum. `\\w+` therefore rejects
+    the perfectly ordinary language name "हिन्दी". Classifying each character
+    explicitly accepts every real script while still refusing control
+    characters and markup.
+    """
+    v = str(v or '')
+    if not (1 <= len(v) <= 40):
+        return False
+    for ch in v:
+        if ch in " .'-()":                 # "English (US)", "Portuguese-Brazil"
+            continue
+        if unicodedata.category(ch)[0] in ('L', 'M', 'N'):
+            continue                       # letters, combining marks, digits
+        return False
+    return True
+
+# --- Single-use tokens ------------------------------------------------------
+def _issue_token(db, user_id, kind, minutes):
+    """Mint a token; only its SHA-256 is persisted. Returns the raw token."""
+    raw = secrets.token_urlsafe(32)
+    h = hashlib.sha256(raw.encode('utf-8')).hexdigest()
+    now = datetime.datetime.now()
+    # Retire any previous live token of this kind first (one active link at a
+    # time) - also keeps the ux_prt_live unique index satisfied.
+    db.execute("UPDATE password_reset_tokens SET used=1 "
+               "WHERE user_id=? AND kind=? AND used=0", (user_id, kind))
+    db.execute("INSERT INTO password_reset_tokens "
+               "(user_id,token_hash,kind,expires_at,used,created_at) "
+               "VALUES (?,?,?,?,0,?)",
+               (user_id, h, kind,
+                (now + datetime.timedelta(minutes=minutes)).isoformat(),
+                now.isoformat()))
+    db.commit()
+    return raw
+
+def _consume_token(db, raw, kind):
+    """Validate and burn a token. Returns the user id, or None."""
+    if not raw:
+        return None
+    h = hashlib.sha256(raw.encode('utf-8')).hexdigest()
+    row = db.execute("SELECT * FROM password_reset_tokens "
+                     "WHERE token_hash=? AND kind=? AND used=0",
+                     (h, kind)).fetchone()
+    if not row:
+        return None
+    try:
+        if datetime.datetime.fromisoformat(row['expires_at']) < datetime.datetime.now():
+            db.execute("UPDATE password_reset_tokens SET used=1 WHERE id=?", (row['id'],))
+            db.commit()
+            return None
+    except ValueError:
+        return None
+    db.execute("UPDATE password_reset_tokens SET used=1 WHERE id=?", (row['id'],))
+    db.commit()
+    return row['user_id']
+
+def _dev_tokens():
+    """Should a freshly issued token be returned in the HTTP response?
+
+    There is no SMTP/SMS gateway in this app, so without this the link could
+    never reach a human - the school office mints links manually instead
+    (POST /api/users/<id>/token). Default is **off**: a default of "on unless
+    production" would mean one missing env var silently exposes every reset
+    link in production. Set PROFILE_DEV_TOKENS=1 for local development/tests.
+    """
+    v = os.environ.get('PROFILE_DEV_TOKENS')
+    if v is None:
+        return False
+    return v.strip().lower() in ('1', 'true', 'yes', 'on')
+
+# --- Profile row + completion ---------------------------------------------
+def _profile_row(db, user_id):
+    row = db.execute("SELECT * FROM user_profiles WHERE user_id=?",
+                     (user_id,)).fetchone()
+    if row:
+        return row
+    now = datetime.datetime.now().isoformat()
+    db.execute("INSERT INTO user_profiles (user_id, created_at, updated_at) "
+               "VALUES (?,?,?)", (user_id, now, now))
+    db.commit()
+    return db.execute("SELECT * FROM user_profiles WHERE user_id=?",
+                      (user_id,)).fetchone()
+
+def _socials_of(p):
+    try:
+        v = json.loads(p['socials'] or '{}')
+    except (ValueError, TypeError):
+        v = {}
+    return v if isinstance(v, dict) else {}
+
+def profile_completion(p):
+    """Five non-sensitive, genuinely optional signals, 20% each.
+
+    Deliberately nothing here is personal data (no name, contact, DOB, gender
+    or location), so nobody is pushed to hand over information they would
+    rather keep private.
+    """
+    socials = _socials_of(p)
+    items = [
+        ("photo",     "Profile photo", bool((p['photo'] or '').strip())),
+        ("display",   "Display name",  bool((p['display_name'] or '').strip())),
+        ("bio",       "Bio",           bool((p['bio'] or '').strip())),
+        ("interests", "Interests",     bool((p['interests'] or '').strip())),
+        ("social",    "A social link", any((v or '').strip() for v in socials.values())),
+    ]
+    return {"percent": sum(1 for _, _, ok in items if ok) * 20,
+            "items": [{"key": k, "label": lab, "done": ok} for k, lab, ok in items]}
+
+# --- Images ----------------------------------------------------------------
+def _upload_dir():
+    # Retried per upload: on Render the persistent disk may mount after boot.
+    try:
+        os.makedirs(PROFILE_UPLOAD_DIR, exist_ok=True)
+    except OSError:
+        pass
+    return PROFILE_UPLOAD_DIR
+
+def _sniff_image(data):
+    """Real container type from the first bytes.
+
+    The filename extension and the Content-Type header are both attacker
+    controlled; these bytes are not. An uploaded .exe renamed to .png never
+    matches, so it is rejected before it can reach disk or a browser.
+    """
+    if data[:3] == b'\xff\xd8\xff':
+        return '.jpg'
+    if data[:8] == b'\x89PNG\r\n\x1a\n':
+        return '.png'
+    if len(data) >= 12 and data[:4] == b'RIFF' and data[8:12] == b'WEBP':
+        return '.webp'
+    return None
+
+def store_profile_image(f, user_id):
+    """Validate, re-encode and save an uploaded image.
+
+    Re-encoding through Pillow does three things: proves the bytes really are
+    the image type we sniffed, drops EXIF (which can carry GPS coordinates),
+    and enforces a sane pixel ceiling so a decompression bomb cannot be
+    served back later. The filename is generated entirely server-side from an
+    integer user id plus random hex, so it can never contain a path separator.
+    Returns (filename, None) or (None, error_message).
+    """
+    if not f or not getattr(f, 'filename', ''):
+        return None, "No file selected."
+    f.stream.seek(0)
+    data = f.stream.read(_IMG_MAX + 1)
+    if len(data) > _IMG_MAX:
+        return None, "Image is too large - the limit is 2 MB."
+    ext = _sniff_image(data)
+    if not ext:
+        return None, "Only JPEG, PNG or WebP images are allowed."
+    try:
+        from PIL import Image
+        Image.MAX_IMAGE_PIXELS = 40_000_000   # decompression-bomb guard
+        im = Image.open(io.BytesIO(data))
+        im.load()
+        im.thumbnail((1024, 1024))
+        if ext == '.jpg':
+            im = im.convert('RGB')
+        else:
+            rgba = im.convert('RGBA')
+            # keep transparency only when it is actually used
+            if rgba.getchannel('A').getextrema()[1] == 255:
+                rgba = rgba.convert('RGB')
+            im = rgba
+        buf = io.BytesIO()
+        if ext == '.png':
+            im.save(buf, 'PNG', optimize=True)
+        elif ext == '.webp':
+            im.save(buf, 'WEBP', quality=85)
+        else:
+            im.save(buf, 'JPEG', quality=86, optimize=True)
+        data = buf.getvalue()
+        if len(data) > _IMG_MAX:
+            return None, "Image is too large after processing - please use a smaller photo."
+    except Exception:
+        # Message stays generic: never echo a traceback or Pillow internals.
+        return None, "That file could not be read as an image. Please upload a valid JPEG, PNG or WebP."
+    d = _upload_dir()
+    # Built only from an integer id plus random hex - the caller never
+    # influences it, so there is no separator or '..' to escape with.
+    name = "%s%d_%s%s" % (_UPLOAD_PREFIX, int(user_id),
+                          secrets.token_hex(6), ext)
+    try:
+        with open(os.path.join(d, name), 'wb') as fh:
+            fh.write(data)
+    except OSError:
+        return None, "Could not save the image. Please try again."
+    return name, None
+
+def _delete_stored_image(fn):
+    """Best-effort removal of our own generated file name."""
+    if not fn:
+        return
+    if not re.fullmatch(r'pf\d+_[0-9a-f]{12}\.(jpg|png|webp)', fn):
+        return
+    for d in (PROFILE_UPLOAD_DIR, PHOTO_DIR):
+        try:
+            os.remove(os.path.join(d, fn))
+            return
+        except OSError:
+            continue
+
+# --- Explicit update allowlist --------------------------------------------
+_PROFILE_TEXT = {'full_name': 80, 'display_name': 60, 'bio': 280,
+                 'gender': 24, 'pronouns': 32, 'country': 56, 'city': 56,
+                 'language': 40, 'interests': 300}
+_PROFILE_ENUM = {'theme': ('light', 'dark', 'system'),
+                 'visibility': ('private', 'public')}
+_PROFILE_FLAGS = ('notify_email', 'notify_app', 'notify_attendance', 'notify_notices',
+                  'a11y_large_text', 'a11y_reduced_motion',
+                  'show_email', 'show_phone', 'show_dob')
+_SOCIAL_KEYS = ('instagram', 'facebook', 'youtube', 'linkedin', 'website', 'other')
+
+def _clean_socials(v):
+    if v is None:
+        return {}
+    if not isinstance(v, dict):
+        raise ValueError("Social links must be sent as an object.")
+    out = {}
+    for k in _SOCIAL_KEYS:
+        url = str(v.get(k) or '').strip()
+        if not url:
+            continue
+        if len(url) > 200:
+            raise ValueError("That social link is too long.")
+        # javascript:, data: etc. would execute if ever rendered as an href.
+        if not re.match(r'^https?://', url, re.I):
+            raise ValueError("Social links must start with http:// or https://")
+        out[k] = url
+    return out
+
+def _att_pct(db, sid):
+    """Attendance percentage for one student, month to date.
+
+    Formula mirrors the portal's own figure (present + late over the working
+    days of the current month) so the profile never shows a number that
+    disagrees with My Attendance / Monthly Report.
+    """
+    today = datetime.date.today()
+    import calendar as _cal
+    dim = _cal.monthrange(today.year, today.month)[1]
+    hols = set(r[0] for r in db.execute("SELECT date FROM holidays").fetchall())
+    working = 0
+    for d in range(1, dim + 1):
+        ds = "%04d-%02d-%02d" % (today.year, today.month, d)
+        if datetime.datetime.strptime(ds, "%Y-%m-%d").weekday() == 6:
+            continue
+        if ds in hols:
+            continue
+        working += 1
+    p = db.execute("SELECT COUNT(*) FROM attendance "
+                   "WHERE student_id=? AND status IN ('P','T') AND substr(date,1,7)=?",
+                   (sid, today.strftime("%Y-%m"))).fetchone()[0]
+    return round(p / working * 100, 1) if working else 0.0
+
+def _profile_context(db, u):
+    """Role-appropriate facts drawn from the existing tables.
+
+    Nothing here invents a new permission: a student only ever sees the row
+    linked to their account, a parent only their own children, and a teacher
+    only the classes they are actually scheduled in.
+    """
+    out = {}
+    role = u['role']
+    if role == 'student':
+        sid = u.get('linked_student_id')
+        if sid:
+            row = db.execute("""SELECT s.id, s.student_id, s.name, s.class_id, s.section_id,
+                                       c.name AS class_name, sec.name AS section_name
+                                  FROM students s
+                                  LEFT JOIN classes c ON c.id=s.class_id
+                                  LEFT JOIN sections sec ON sec.id=s.section_id
+                                 WHERE s.id=?""", (sid,)).fetchone()
+            if row:
+                out['student'] = dict(row)
+                out['attendance_percent'] = _att_pct(db, sid)
+                out['attendance_view'] = 'attcal'
+    elif role == 'parent':
+        allowed = sorted(readable_student_ids(u) or [])
+        kids = []
+        for pk in allowed:
+            row = db.execute("""SELECT s.id, s.student_id, s.name, s.class_id, s.section_id,
+                                       c.name AS class_name, sec.name AS section_name
+                                  FROM students s
+                                  LEFT JOIN classes c ON c.id=s.class_id
+                                  LEFT JOIN sections sec ON sec.id=s.section_id
+                                 WHERE s.id=?""", (pk,)).fetchone()
+            if row:
+                d = dict(row)
+                d['attendance_percent'] = _att_pct(db, pk)
+                kids.append(d)
+        if kids:
+            out['children'] = kids
+    elif role == 'teacher':
+        t = db.execute("SELECT id, name, email, subject, assigned_class FROM teachers "
+                       "WHERE user_id=?", (u['id'],)).fetchone()
+        if t:
+            out['staff_record'] = dict(t)
+        # Only classes this teacher is actually scheduled in - never a guess.
+        out['assigned_classes'] = []
+        if t and t['id']:
+            out['assigned_classes'] = [dict(r) for r in db.execute("""
+                SELECT DISTINCT c.id, c.name AS class_name, sec.name AS section_name
+                  FROM timetable_slots sl
+                  JOIN timetable_versions v ON v.id=sl.version_id
+                  JOIN classes c ON c.id=v.class_id
+                  JOIN sections sec ON sec.id=v.section_id
+                 WHERE sl.teacher_id=?
+                 ORDER BY c.name, sec.name""", (t['id'],)).fetchall()]
+    elif role == 'admin':
+        s = db.execute("SELECT school_name FROM settings WHERE id=1").fetchone()
+        out['school_name'] = s['school_name'] if s else ''
+        out['users_total'] = db.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        out['users_pending'] = db.execute(
+            "SELECT COUNT(*) FROM users WHERE status='pending'").fetchone()[0]
+    return out
+
+
+@app.route('/api/auth/register', methods=['POST'])
+def auth_register():
+    """Public sign-up.
+
+    Creates a **pending** account: it cannot authenticate until an admin
+    approves it and assigns the role, which is what stops sign-up from being a
+    privilege-escalation path.
+    """
+    ip = request.headers.get('X-Forwarded-For', request.remote_addr or 'unknown')
+    if _rate_limited("register:%s" % ip, limit=5, window=900):
+        return jsonify({"error": "Too many sign-up attempts. Please try again later."}), 429
+    d = request.get_json(silent=True) or {}
+
+    full_name = _clean_text(d.get('full_name'), 80)
+    username = _clean_text(d.get('username'), 30)
+    email = _clean_text(d.get('email'), 254).lower()
+    phone = re.sub(r'[\s()-]', '', _clean_text(d.get('phone'), 20))
+    dob = _clean_text(d.get('dob'), 10)
+    language = _clean_text(d.get('language'), 40) or 'English'
+    country = _clean_text(d.get('country'), 56)
+    pw = d.get('password') or ''
+    pw2 = d.get('confirm_password') or ''
+
+    fields = {}
+    if len(full_name) < 2:
+        fields['full_name'] = "Please enter your full name."
+    if not _USERNAME_RE.match(username):
+        fields['username'] = "3-30 characters: letters, numbers, dot, dash or underscore."
+    if not _EMAIL_RE.match(email) or len(email) > 254:
+        fields['email'] = "Please enter a valid email address."
+    if phone and not re.fullmatch(r'\+?\d{7,15}', phone):
+        fields['phone'] = "Enter 7-15 digits, optionally starting with +."
+    if dob and not _valid_dob(dob):
+        fields['dob'] = "Please enter a valid date of birth."
+    # Any real script: हिन्दी, বাংলা, English (US), اردو ... see _valid_language.
+    if not _valid_language(language):
+        fields['language'] = "Please choose a language name."
+    msg = _pw_policy(pw)
+    if msg:
+        fields['password'] = msg
+    elif pw != pw2:
+        fields['confirm_password'] = "The two passwords do not match."
+    if not d.get('accept_terms'):
+        fields['accept_terms'] = "You must accept the Terms of Service and Privacy Policy."
+
+    db = get_db()
+    # Uniqueness is checked case-insensitively on both, because SQLite's
+    # default TEXT comparison is case sensitive and Admin/admin would collide.
+    if not fields.get('username') and db.execute(
+            "SELECT 1 FROM users WHERE lower(username)=lower(?)", (username,)).fetchone():
+        fields['username'] = "That username is already taken."
+    if not fields.get('email') and db.execute(
+            "SELECT 1 FROM users WHERE email<>'' AND lower(email)=lower(?)",
+            (email,)).fetchone():
+        fields['email'] = "That email address is already registered."
+    # users.phone carries a unique index (one mobile per account, and parents
+    # sign in with it), so check it here rather than letting the INSERT fail
+    # and blame the wrong field.
+    if phone and db.execute(
+            "SELECT 1 FROM users WHERE phone=? AND phone<>''",
+            (phone,)).fetchone():
+        fields['phone'] = "That mobile number is already registered to another account."
+
+    if fields:
+        return jsonify({"error": "Please fix the highlighted fields.",
+                        "fields": fields}), 400
+
+    now = datetime.datetime.now().isoformat()
+    try:
+        cur = db.execute(
+            "INSERT INTO users (username, password_hash, role, permissions, "
+            "linked_student_id, created_at, email, phone, status, email_verified, "
+            "updated_at, auth_epoch) VALUES (?,?,?,?,?,?,?,?,?,?,?,0)",
+            (username, hash_pw(pw), 'student', json.dumps([]), None, now,
+             email, phone, 'pending', 0, now))
+        uid = cur.lastrowid
+        db.execute("INSERT INTO user_profiles "
+                   "(user_id, full_name, language, country, dob, created_at, updated_at) "
+                   "VALUES (?,?,?,?,?,?,?)",
+                   (uid, full_name, language, country, dob, now, now))
+        db.commit()
+    except sqlite3.IntegrityError as e:
+        # Lost a race with a concurrent sign-up. Name the column that actually
+        # collided instead of always blaming the username.
+        msg = str(e)
+        if 'email' in msg:
+            field, text = 'email', "That email address is already registered."
+        elif 'phone' in msg:
+            field, text = 'phone', "That mobile number is already registered."
+        else:
+            field, text = 'username', "That username is already taken."
+        return jsonify({"error": "Please fix the highlighted fields.",
+                        "fields": {field: text}}), 400
+
+    token = _issue_token(db, uid, 'verify', 60 * 24)
+    resp = {"ok": True, "status": "pending", "username": username,
+            "message": "Your account has been created and is awaiting approval "
+                       "from the school office. You will be able to sign in once "
+                       "it has been approved."}
+    if _dev_tokens():
+        # No mail gateway exists, so without this nobody could ever verify.
+        # Only ever emitted outside production (see _dev_tokens).
+        resp["verification_token"] = token
+    return jsonify(resp), 201
+
+
+@app.route('/api/auth/verify-email', methods=['POST'])
+def auth_verify_email():
+    ip = request.headers.get('X-Forwarded-For', request.remote_addr or 'unknown')
+    if _rate_limited("verify:%s" % ip, limit=15, window=900):
+        return jsonify({"error": "Too many attempts. Please try again later."}), 429
+    d = request.get_json(silent=True) or {}
+    db = get_db()
+    uid = _consume_token(db, d.get('token') or '', 'verify')
+    if not uid:
+        return jsonify({"error": "That verification link is invalid or has expired."}), 400
+    db.execute("UPDATE users SET email_verified=1, updated_at=? WHERE id=?",
+               (datetime.datetime.now().isoformat(), uid))
+    db.commit()
+    return jsonify({"ok": True, "message": "Email address verified."})
+
+
+@app.route('/api/auth/forgot-password', methods=['POST'])
+def auth_forgot_password():
+    """Always answers the same way, whether or not the address exists."""
+    ip = request.headers.get('X-Forwarded-For', request.remote_addr or 'unknown')
+    if _rate_limited("forgot:%s" % ip, limit=5, window=900):
+        return jsonify({"error": "Too many attempts. Please try again later."}), 429
+    d = request.get_json(silent=True) or {}
+    ident = _clean_text(d.get('identifier'), 254)
+    generic = {"ok": True,
+               "message": "If an account matches that username or email, a "
+                          "password reset link has been created."}
+    if ident:
+        db = get_db()
+        row = db.execute("SELECT id FROM users WHERE lower(username)=lower(?) "
+                         "OR (email<>'' AND lower(email)=lower(?)) "
+                         "ORDER BY id LIMIT 1", (ident, ident)).fetchone()
+        if row:
+            token = _issue_token(db, row['id'], 'reset', 60)
+            if _dev_tokens():
+                generic["dev_token"] = token
+    return jsonify(generic)
+
+
+@app.route('/api/auth/reset-password', methods=['POST'])
+def auth_reset_password():
+    ip = request.headers.get('X-Forwarded-For', request.remote_addr or 'unknown')
+    if _rate_limited("reset:%s" % ip, limit=10, window=900):
+        return jsonify({"error": "Too many attempts. Please try again later."}), 429
+    d = request.get_json(silent=True) or {}
+    pw = d.get('new_password') or ''
+    msg = _pw_policy(pw)
+    if msg:
+        return jsonify({"error": msg}), 400
+    if pw != (d.get('confirm_password') or ''):
+        return jsonify({"error": "The two passwords do not match."}), 400
+    db = get_db()
+    uid = _consume_token(db, d.get('token') or '', 'reset')
+    if not uid:
+        return jsonify({"error": "That reset link is invalid or has expired."}), 400
+    row = db.execute("SELECT role FROM users WHERE id=?", (uid,)).fetchone()
+    db.execute("UPDATE users SET password_hash=?, updated_at=?, "
+               "auth_epoch=COALESCE(auth_epoch,0)+1 WHERE id=?", (hash_pw(pw), now_iso(), uid))
+    if row and row['role'] == 'parent':
+        try:
+            db.execute("UPDATE parents SET password_hash=? WHERE user_id=?", (hash_pw(pw), uid))
+        except Exception:
+            pass
+    db.commit()
+    # Bumping auth_epoch invalidates every session that existed before the
+    # reset, so an attacker holding an old cookie is signed out on next request.
+    return jsonify({"ok": True, "message": "Password updated. Please sign in again."})
+
+
+def now_iso():
+    return datetime.datetime.now().isoformat()
+
+
+@app.route('/api/profile', methods=['GET', 'PUT'])
+def profile_api():
+    u = get_current_user()
+    if not u:
+        return jsonify({"error": "Not authenticated"}), 401
+    db = get_db()
+    acc = db.execute("SELECT id, username, role, email, phone, status, "
+                     "email_verified, created_at, linked_student_id "
+                     "FROM users WHERE id=?", (u['id'],)).fetchone()
+    if not acc:
+        return jsonify({"error": "Account not found"}), 404
+
+    if request.method == 'GET':
+        p = _profile_row(db, u['id'])
+        prof = dict(p)
+        prof['socials'] = _socials_of(p)
+        return jsonify({
+            "account": dict(acc),
+            "profile": prof,
+            "completion": profile_completion(p),
+            "context": _profile_context(db, u),
+            "can": {"edit_profile": True,
+                    "manage_users": can(u['role'], "teachers", "full"),
+                    "public_profile_url": "/api/profile/public/%s" % acc['username']},
+        })
+
+    # ---- UPDATE (explicit allowlist; role/permissions/status are unreachable) ----
+    d = request.get_json(silent=True) or {}
+    errors = {}
+    updates = {}
+    for col, limit in _PROFILE_TEXT.items():
+        if col in d:
+            updates[col] = _clean_text(d.get(col), limit)
+    if 'bio' in updates and len(updates['bio']) > 280:
+        errors['bio'] = "Keep your bio under 280 characters."
+    if 'full_name' in updates and len(updates['full_name']) < 2:
+        errors['full_name'] = "Please enter your full name."
+    if 'language' in updates and updates['language'] \
+            and not _valid_language(updates['language']):
+        errors['language'] = "Please choose a language name."
+    for col, allowed in _PROFILE_ENUM.items():
+        if col in d:
+            v = str(d.get(col) or '')
+            if v not in allowed:
+                errors[col] = "Allowed values: " + ", ".join(allowed)
+            else:
+                updates[col] = v
+    for col in _PROFILE_FLAGS:
+        if col in d:
+            updates[col] = 1 if str(d.get(col)).lower() in ('1', 'true', 'yes', 'on') else 0
+    if 'dob' in d:
+        v = _clean_text(d.get('dob'), 10)
+        if not _valid_dob(v):
+            errors['dob'] = "Please enter a valid date of birth."
+        else:
+            updates['dob'] = v
+    if 'socials' in d:
+        try:
+            updates['socials'] = json.dumps(_clean_socials(d['socials']))
+        except ValueError as e:
+            errors['socials'] = str(e)
+
+    # Account columns the user may genuinely edit on their own account.
+    if 'username' in d:
+        username = _clean_text(d.get('username'), 30)
+        if not _USERNAME_RE.match(username):
+            errors['username'] = "3-30 characters: letters, numbers, dot, dash or underscore."
+        elif db.execute("SELECT 1 FROM users WHERE lower(username)=lower(?) AND id<>?",
+                        (username, u['id'])).fetchone():
+            errors['username'] = "That username is already taken."
+        else:
+            updates['username'] = username
+    if 'email' in d:
+        email = _clean_text(d.get('email'), 254).lower()
+        if not _EMAIL_RE.match(email):
+            errors['email'] = "Please enter a valid email address."
+        elif db.execute("SELECT 1 FROM users WHERE email<>'' AND lower(email)=lower(?) AND id<>?",
+                        (email, u['id'])).fetchone():
+            errors['email'] = "That email address is already registered."
+        else:
+            updates['email'] = email
+            # Re-verify only when the address actually changes, so re-saving an
+            # unchanged profile never silently un-verifies the account.
+            if email != (acc['email'] or '').lower():
+                updates['email_verified'] = 0
+    if 'phone' in d:
+        phone = re.sub(r'[\s()-]', '', _clean_text(d.get('phone'), 20))
+        if phone and not re.fullmatch(r'\+?\d{7,15}', phone):
+            errors['phone'] = "Enter 7-15 digits, optionally starting with +."
+        elif phone and db.execute("SELECT 1 FROM users WHERE phone=? AND id<>?",
+                                  (phone, u['id'])).fetchone():
+            errors['phone'] = "That mobile number is already in use."
+        else:
+            updates['phone'] = phone
+
+    if errors:
+        return jsonify({"error": "Please fix the highlighted fields.",
+                        "fields": errors}), 400
+
+    profile_cols = [c for c in updates if c in _PROFILE_TEXT or c in _PROFILE_ENUM
+                    or c in _PROFILE_FLAGS or c in ('dob', 'socials')]
+    user_cols = [c for c in updates if c in ('username', 'email', 'phone', 'email_verified')]
+    ts = now_iso()
+    try:
+        if profile_cols:
+            sql = "UPDATE user_profiles SET " + ",".join("%s=?" % c for c in profile_cols) + \
+                  ", updated_at=? WHERE user_id=?"
+            db.execute(sql, [updates[c] for c in profile_cols] + [ts, u['id']])
+        if user_cols:
+            sql = "UPDATE users SET " + ",".join("%s=?" % c for c in user_cols) + \
+                  ", updated_at=? WHERE id=?"
+            db.execute(sql, [updates[c] for c in user_cols] + [ts, u['id']])
+        db.commit()
+    except sqlite3.IntegrityError as e:
+        # A unique index (email/phone) is the only thing that can fire here.
+        col = 'phone' if 'phone' in str(e) else 'email'
+        return jsonify({"error": "Please fix the highlighted fields.",
+                        "fields": {col: "That value is already in use."}}), 400
+
+    p = _profile_row(db, u['id'])
+    prof = dict(p)
+    prof['socials'] = _socials_of(p)
+    return jsonify({"ok": True, "message": "Profile saved.",
+                    "profile": prof, "completion": profile_completion(p)})
+
+
+@app.route('/api/profile/photo', methods=['POST', 'DELETE'])
+@app.route('/api/profile/cover', methods=['POST', 'DELETE'])
+def profile_photo_api():
+    u = get_current_user()
+    if not u:
+        return jsonify({"error": "Not authenticated"}), 401
+    db = get_db()
+    col = 'cover_photo' if request.path.endswith('/cover') else 'photo'
+    p = _profile_row(db, u['id'])
+    if request.method == 'DELETE':
+        _delete_stored_image(p[col])
+        db.execute("UPDATE user_profiles SET %s='', updated_at=? WHERE user_id=?" % col,
+                   (now_iso(), u['id']))
+        db.commit()
+        return jsonify({"ok": True, "message": "Image removed."})
+    f = request.files.get('image') or request.files.get('photo')
+    if f is None:
+        return jsonify({"error": "No file selected."}), 400
+    # Size, magic-byte and Pillow re-encode checks all live in one place, so
+    # the avatar and cover paths can never drift apart.
+    name, err = store_profile_image(f, u['id'])
+    if err:
+        return jsonify({"error": err}), 400
+    old = p[col]
+    db.execute("UPDATE user_profiles SET %s=?, updated_at=? WHERE user_id=?" % col,
+               (name, now_iso(), u['id']))
+    db.commit()
+    if old and old != name:
+        _delete_stored_image(old)
+    pp = _profile_row(db, u['id'])
+    return jsonify({"ok": True, "message": "Photo updated.",
+                    col: name, "completion": profile_completion(pp)})
+
+
+@app.route('/api/profile/sessions', methods=['GET'])
+def profile_sessions():
+    u = get_current_user()
+    if not u:
+        return jsonify({"error": "Not authenticated"}), 401
+    rows = get_db().execute("SELECT id, time, success FROM login_history "
+                            "WHERE username=? ORDER BY id DESC LIMIT 20",
+                            (u['username'],)).fetchall()
+    ep = get_db().execute("SELECT auth_epoch FROM users WHERE id=?",
+                          (u['id'],)).fetchone()
+    return jsonify({"sessions": [dict(r) for r in rows],
+                    "auth_epoch": int((ep and ep['auth_epoch']) or 0),
+                    "note": "Sign-in history for your username."})
+
+
+@app.route('/api/profile/logout-others', methods=['POST'])
+def profile_logout_others():
+    """Sign out every other device by bumping auth_epoch.
+
+    get_current_user() compares the epoch baked into the session cookie
+    against the row, so every older cookie fails on its next request while
+    this one is refreshed to the new value.
+    """
+    u = get_current_user()
+    if not u:
+        return jsonify({"error": "Not authenticated"}), 401
+    db = get_db()
+    db.execute("UPDATE users SET auth_epoch=COALESCE(auth_epoch,0)+1, updated_at=? "
+               "WHERE id=?", (now_iso(), u['id']))
+    db.commit()
+    row = db.execute("SELECT auth_epoch FROM users WHERE id=?", (u['id'],)).fetchone()
+    session['epoch'] = int(row['auth_epoch'] or 0)
+    return jsonify({"ok": True,
+                    "message": "All other devices have been signed out."})
+
+
+@app.route('/api/profile/delete-request', methods=['GET', 'POST'])
+def profile_delete_request():
+    """Request account removal - never an instant self-serve deletion.
+
+    An admin must decide it, and closing a login account never touches
+    attendance, marks or any other school record.
+    """
+    u = get_current_user()
+    if not u:
+        return jsonify({"error": "Not authenticated"}), 401
+    db = get_db()
+    if request.method == 'GET':
+        row = db.execute("SELECT * FROM account_deletion_requests WHERE user_id=? "
+                         "AND status='pending' ORDER BY id DESC LIMIT 1",
+                         (u['id'],)).fetchone()
+        return jsonify({"request": dict(row) if row else None})
+    ip = request.headers.get('X-Forwarded-For', request.remote_addr or 'unknown')
+    if _rate_limited("delreq:%s" % ip, limit=5, window=900):
+        return jsonify({"error": "Too many attempts. Please try again later."}), 429
+    existing = db.execute("SELECT id FROM account_deletion_requests "
+                          "WHERE user_id=? AND status='pending'", (u['id'],)).fetchone()
+    if existing:
+        return jsonify({"error": "You already have a pending deletion request."}), 409
+    d = request.get_json(silent=True) or {}
+    if not str(d.get('confirm') or '').strip():
+        return jsonify({"error": "Please type DELETE to confirm."}), 400
+    db.execute("INSERT INTO account_deletion_requests (user_id, reason, status, created_at) "
+               "VALUES (?,?, 'pending', ?)",
+               (u['id'], _clean_text(d.get('reason'), 300), now_iso()))
+    admins = db.execute("SELECT id FROM users WHERE role='admin'").fetchall()
+    for a in admins:
+        db.execute("INSERT INTO notifications (user_id, type, title, content, date, read) "
+                   "VALUES (?,?,?,?,?,0)",
+                   (a['id'], 'account',
+                    'Account deletion request',
+                    "%s requested account deletion." % u['username'], now_iso()))
+    db.commit()
+    return jsonify({"ok": True,
+                    "message": "Your request has been sent to the school office."})
+
+
+@app.route('/api/profile/public/<username>', methods=['GET'])
+def profile_public(username):
+    """Exact-username lookup for profiles the owner made public.
+
+    There is deliberately no listing or search endpoint, and the response is a
+    fixed allowlist: no role, no email/phone/DOB unless explicitly opted in,
+    and never any attendance, class or other student data.
+    """
+    db = get_db()
+    row = db.execute("SELECT u.username, p.* FROM users u "
+                     "JOIN user_profiles p ON p.user_id=u.id "
+                     "WHERE lower(u.username)=lower(?)", (str(username)[:30],)).fetchone()
+    if not row:
+        return jsonify({"error": "Not found"}), 404
+    if (row['visibility'] or 'private') != 'public':
+        # Same answer as a missing profile: existence itself is not leaked.
+        return jsonify({"error": "Not found"}), 404
+    out = {"username": row['username'],
+           "display_name": row['display_name'], "bio": row['bio'],
+           "photo": row['photo'], "cover_photo": row['cover_photo'],
+           "city": row['city'], "country": row['country'],
+           "language": row['language'], "interests": row['interests'],
+           "socials": _socials_of(row)}
+    if row['show_email']:
+        out['email'] = db.execute("SELECT email FROM users WHERE username=?",
+                                  (row['username'],)).fetchone()[0]
+    if row['show_phone']:
+        out['phone'] = db.execute("SELECT phone FROM users WHERE username=?",
+                                  (row['username'],)).fetchone()[0]
+    if row['show_dob']:
+        out['dob'] = row['dob']
+    return jsonify(out)
+
+
+@app.route('/api/users', methods=['GET','POST','PUT','DELETE'])
 def users_api():
     db=get_db()
     u=get_current_user()
     if not u or not can(u['role'], "teachers", "full"):
         return jsonify({"error":"Access denied: Admin only"}),403
     if request.method=='GET':
-        rows=db.execute("SELECT id,username,role,permissions,created_at FROM users ORDER BY id").fetchall()
+        rows=db.execute("""SELECT id,username,role,permissions,created_at,status,email,
+                                  phone,email_verified
+                             FROM users ORDER BY id""").fetchall()
         return jsonify([dict(r) for r in rows])
     if request.method=='POST':
-        d=request.get_json()
+        d=request.get_json() or {}
+        uname = _clean_text(d.get('username'), 30)
+        role = str(d.get('role') or '')
+        if not _USERNAME_RE.match(uname):
+            return jsonify({"error":"Username must be 3-30 characters: letters, numbers, dot, dash or underscore."}),400
+        if role not in ROLES:
+            return jsonify({"error":"role must be one of: "+", ".join(ROLES)}),400
+        # Same policy as self-service sign-up: an admin account must not be
+        # created with a weaker password than a public one could use.
+        msg = _pw_policy(d.get('password') or '')
+        if msg:
+            return jsonify({"error": msg}),400
         try:
-            db.execute("INSERT INTO users (username,password_hash,role,permissions,created_at) VALUES (?,?,?,?,?)",
-                       (d['username'], hash_pw(d['password']), d['role'], json.dumps(d.get('permissions',[])), datetime.datetime.now().isoformat()))
+            db.execute("INSERT INTO users (username,password_hash,role,permissions,created_at,email,phone,status) VALUES (?,?,?,?,?,?,?,?)",
+                       (uname, hash_pw(d['password']), role, json.dumps(d.get('permissions',[])),
+                        datetime.datetime.now().isoformat(),
+                        _clean_text(d.get('email'), 254).lower(),
+                        re.sub(r'[\s()-]', '', _clean_text(d.get('phone'), 20)),
+                        'active'))
             db.commit()
             return jsonify({"ok":True})
         except sqlite3.IntegrityError:
             return jsonify({"error":"Duplicate username"}),400
+    if request.method=='PUT':
+        # The trusted workflow that approves self-registered accounts and is
+        # the ONLY place a role may be assigned.
+        uid=request.args.get('id')
+        d=request.get_json(silent=True) or {}
+        row=db.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+        if not row: return jsonify({"error":"User not found"}),404
+        updates={}
+        if 'status' in d:
+            st=str(d.get('status') or '')
+            if st not in ('active','pending','rejected','suspended'):
+                return jsonify({"error":"status must be active, pending, rejected or suspended"}),400
+            updates['status']=st
+        if 'role' in d:
+            role=str(d.get('role') or '')
+            if role not in ROLES:
+                return jsonify({"error":"role must be one of: "+", ".join(ROLES)}),400
+            updates['role']=role
+        if 'permissions' in d:
+            perms=d.get('permissions')
+            if not isinstance(perms,list) or any(p not in PERMISSIONS for p in perms):
+                return jsonify({"error":"Unknown permission in list"}),400
+            updates['permissions']=json.dumps(perms)
+        if 'email_verified' in d:
+            updates['email_verified']=1 if str(d.get('email_verified')).lower() in ('1','true','yes') else 0
+        if not updates:
+            return jsonify({"error":"Nothing to update"}),400
+        updates['updated_at']=now_iso()
+        db.execute("UPDATE users SET "+",".join("%s=?"%c for c in updates)+" WHERE id=?",
+                   [updates[c] for c in updates]+[int(uid)])
+        db.commit()
+        return jsonify({"ok":True,"user":dict(db.execute(
+            "SELECT id,username,role,status,email_verified FROM users WHERE id=?",
+            (uid,)).fetchone())})
     uid=request.args.get('id')
     db.execute("DELETE FROM users WHERE id=?", (uid,))
     db.commit()
     return jsonify({"ok":True})
+
+
+@app.route('/api/users/<int:uid>/token', methods=['POST'])
+def user_issue_token(uid):
+    """Issue a fresh verify/reset link for another account (admin only).
+
+    Because only the token hash is stored, the school office cannot read an
+    existing link - they can only mint a new one and pass it on out of band.
+    """
+    u=get_current_user()
+    if not u or not can(u['role'], "teachers", "full"):
+        return jsonify({"error":"Access denied: Admin only"}),403
+    db=get_db()
+    if not db.execute("SELECT 1 FROM users WHERE id=?", (uid,)).fetchone():
+        return jsonify({"error":"User not found"}),404
+    d=request.get_json(silent=True) or {}
+    kind=str(d.get('kind') or 'verify')
+    if kind not in ('verify','reset'):
+        return jsonify({"error":"kind must be verify or reset"}),400
+    raw=_issue_token(db, uid, kind, 60*24 if kind=='verify' else 60)
+    return jsonify({"ok":True,"kind":kind,"token":raw,
+                    "hint": ("Hand this to the user, then POST it to "
+                             "/api/auth/verify-email"
+                             if kind=='verify' else
+                             "Hand this to the user, then POST it to "
+                             "/api/auth/reset-password")})
+
+
+@app.route('/api/account-deletions', methods=['GET','POST'])
+def account_deletions():
+    u=get_current_user()
+    if not u or not can(u['role'], "teachers", "full"):
+        return jsonify({"error":"Access denied: Admin only"}),403
+    db=get_db()
+    if request.method=='GET':
+        rows=db.execute("""SELECT r.*, us.username, us.role
+                             FROM account_deletion_requests r
+                             JOIN users us ON us.id=r.user_id
+                            ORDER BY r.id DESC LIMIT 100""").fetchall()
+        return jsonify([dict(r) for r in rows])
+    d=request.get_json(silent=True) or {}
+    rid=d.get('id')
+    decision=str(d.get('decision') or '')
+    if decision not in ('approved','rejected'):
+        return jsonify({"error":"decision must be approved or rejected"}),400
+    row=db.execute("SELECT * FROM account_deletion_requests WHERE id=?", (rid,)).fetchone()
+    if not row: return jsonify({"error":"Request not found"}),404
+    db.execute("UPDATE account_deletion_requests SET status=?, decided_by=?, decided_at=? WHERE id=?",
+               (decision, u['id'], now_iso(), rid))
+    if decision=='approved':
+        # Close the login only. Attendance, marks and every other school record
+        # are left untouched - those belong to the school, not to the login.
+        db.execute("UPDATE users SET status='suspended', auth_epoch=COALESCE(auth_epoch,0)+1, "
+                   "updated_at=? WHERE id=?", (now_iso(), row['user_id']))
+    db.commit()
+    return jsonify({"ok":True,"status":decision})
+
 
 @app.route('/api/login_history')
 def login_history():
