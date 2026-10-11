@@ -78,20 +78,24 @@ async function api(p,opts={}){
   // ensure cookie sent
   const r=await fetch(p.startsWith('/') ? BACKEND_URL + p : p, opts);
   const j=await r.json().catch(()=>({}));
+  /* Attach status + parsed body to the thrown Error so callers can react to
+     structured failures (the timetable conflict list, say) without a second
+     request. Existing callers only read .message, so this is additive. */
+  const fail=(msg)=>{ const e=new Error(msg||'Error'); e.status=r.status; e.body=j; return e; };
   if(r.status===401){
     // not authenticated -> show login
     $('#appShell')?.classList.add('hidden');
     const ls=$('#loginScreen');
     if(ls) ls.style.display='flex';
-    throw new Error(j.error||'Not authenticated');
+    throw fail(j.error||'Not authenticated');
   }
   if(r.status===403){
     // Surface the reason without hijacking the view the user is looking at.
     // (view-level denial is handled by navigate() -> showDenied())
     toast(j.error||'Access denied', false);
-    throw new Error(j.error||'Access denied');
+    throw fail(j.error||'Access denied');
   }
-  if(!r.ok) throw new Error(j.error||'Error');
+  if(!r.ok) throw fail(j.error||'Error');
   return j;
 }
 /* Staff-only editing controls stay out of the way for students/parents.
@@ -266,14 +270,14 @@ async function loadClasses(){
   }catch(e){ if(e.message.includes('Access denied')) showDenied(state.role||'guest','classes'); }
 }
 function filterSection(sel){
-  const map={'#s_section':'#s_class','#attSection':'#attClass','#monSection':'#monClass','#waSection':'#waClass','#f_section':'#f_class','#calSection':'#calClass','#anaSection':'#anaClass','#repASection':'#repAClass'};
+  const map={'#s_section':'#s_class','#attSection':'#attClass','#monSection':'#monClass','#waSection':'#waClass','#f_section':'#f_class','#calSection':'#calClass','#anaSection':'#anaClass','#repASection':'#repAClass','#ttSection':'#ttClass'};
   const classSel=map[sel]; if(!classSel) return;
   const cid=$(classSel)?.value; const el=$(sel); if(!el) return;
   if(!cid){ el.innerHTML='<option value="">All / Select</option>'; return; }
   const cls=state.classes.find(x=>x.id==cid);
   el.innerHTML='<option value="">All / Select</option>'+(cls?.sections||[]).map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
 }
-function filterSections(){ ['#s_section','#attSection','#monSection','#waSection','#f_section','#calSection','#anaSection','#repASection'].forEach(s=>filterSection(s)); }
+function filterSections(){ ['#s_section','#attSection','#monSection','#waSection','#f_section','#calSection','#anaClass','#anaSection','#repASection','#ttSection'].forEach(s=>filterSection(s)); }
 async function addClass(){ if(state.role!=='admin') return toast('Admin only',false); const n=$('#newClass').value.trim(); if(!n) return; try{await api('/api/classes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n})}); $('#newClass').value=''; loadClasses(); toast('Class added');}catch(e){toast(e.message,false)} }
 async function delClass(id){ if(state.role!=='admin') return toast('Admin only',false); if(!confirm('Delete class?')) return; try{await api('/api/classes?id='+id,{method:'DELETE'}); loadClasses(); toast('Deleted');}catch(e){toast(e.message,false)} }
 async function addSection(){ if(state.role!=='admin') return toast('Admin only',false); const cid=$('#secClass').value, name=$('#newSec').value.trim(); if(!cid||!name) return toast('Select class & section (A-K)',false); try{await api('/api/sections',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({class_id:cid,name})}); loadClasses(); toast('Section '+name+' added');}catch(e){toast(e.message,false)} }
@@ -1012,17 +1016,616 @@ function quickMark(classId, sectionId, subjectId){
   },300);
 }
 // ---- TIMETABLE ----
+// Weekly timetable for every role. The browser only ever renders what the
+// server returned: which class a student may see, and which periods a teacher
+// is assigned, are decided server-side — never in the query string.
+const TT_DAYS=['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+const TT_KINDS=['period','break','lunch','assembly'];
+const TT_PALETTE=['#2563eb','#0891b2','#16a34a','#d97706','#db2777','#7c3aed','#0d9488','#dc2626','#4f46e5','#65a30d'];
+const TT_ZONES=['Asia/Kolkata','Asia/Dhaka','Asia/Karachi','Asia/Colombo','Asia/Kathmandu','Asia/Dubai',
+  'Europe/London','Europe/Berlin','America/New_York','America/Chicago','America/Los_Angeles',
+  'Australia/Sydney','Africa/Nairobi','Africa/Lagos'];
+const ttState={payload:null,tab:'grid',versions:[],version:null,versionId:null,rows:[],
+  subjects:[],teachers:[],sessions:[],metaLoaded:false};
+
+function ttIsStudent(){ return state.role==='student'||state.role==='parent'; }
+function ttIsAdmin(){ return state.role==='admin'; }
+/* Deterministic per-subject colour so the same subject is always the same hue,
+   with no configuration to maintain. */
+function ttColor(name){
+  if(!name) return '#94a3b8';
+  const s=String(name); let h=0;
+  for(let i=0;i<s.length;i++) h=(h*31+s.charCodeAt(i))>>>0;
+  return TT_PALETTE[h%TT_PALETTE.length];
+}
+function ttMin(hhmm){
+  const m=/^(\d{1,2}):(\d{2})$/.exec(String(hhmm||'').trim());
+  if(!m) return null;
+  const h=+m[1],mi=+m[2];
+  return (h>23||mi>59)?null:h*60+mi;
+}
+function ttAddMin(hhmm,n){
+  const m=ttMin(hhmm); if(m==null) return hhmm||'08:00';
+  const t=Math.min(23*60+59,m+n);
+  return String(Math.floor(t/60)).padStart(2,'0')+':'+String(t%60).padStart(2,'0');
+}
+/* Date maths kept in local time: toISOString() would shift days either side of
+   midnight UTC and quietly show the wrong weekday column. */
+function ttAddDays(iso,n){
+  const [y,m,d]=iso.split('-').map(Number);
+  const dt=new Date(y,m-1,d+n);
+  return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`;
+}
+function ttWeekStart(iso){
+  const [y,m,d]=iso.split('-').map(Number);
+  return ttAddDays(iso,-((new Date(y,m-1,d).getDay()+6)%7));
+}
+function ttEmpty(ic,title,text,extra){
+  return `<div class="empty"><div class="eic"><span class="ic" data-icon="${ic}"></span></div>`+
+    `<h4>${esc(title)}</h4><p>${esc(text)}</p>${extra||''}</div>`;
+}
+function ttOpts(opts,val){
+  return opts.map(o=>`<option value="${escAttr(o.v)}"${String(o.v)===String(val??'')?' selected':''}>${esc(o.t)}</option>`).join('');
+}
+function ttQuery(extra){
+  const q=new URLSearchParams();
+  const cid=$('#ttClass')?.value, sid=$('#ttSection')?.value,
+        ses=$('#ttSession')?.value, dt=$('#ttDate')?.value;
+  if(cid) q.set('class_id',cid);
+  if(sid) q.set('section_id',sid);
+  if(ses) q.set('session_id',ses);
+  if(dt) q.set('date',dt);
+  if(state.role==='teacher' && !cid) q.set('view','mine');
+  if(extra) Object.entries(extra).forEach(([k,v])=>{ if(v!==''&&v!=null) q.set(k,v); });
+  return q.toString();
+}
+
 async function loadTimetable(){
-  const day=$('#ttDay')?.value || new Date().toLocaleDateString('en-US',{weekday:'long'});
-  let data; try{ data=await api('/api/timetable?day='+encodeURIComponent(day)); }catch(e){ return; }
-  const el=$('#ttTable'); if(!el) return;
-  el.innerHTML=data.length? `<table><thead><tr><th>Time</th><th>Subject</th><th>Class</th><th>Room</th><th>Status</th></tr></thead><tbody>`+data.map(t=>`<tr><td>${t.period_time}</td><td>${t.subject_name||''}</td><td>${t.class_name||''}-${t.section_name||''}</td><td>${t.room||''}</td><td>${t.completed?'✓ Completed':(state.role==='admin'||state.role==='teacher'?`<button class="btn-primary" onclick="quickMark(${t.class_id},${t.section_id},'${t.subject_id||''}')">Mark Attendance</button>`:'Upcoming')}</td></tr>`).join('')+`</tbody></table>` : `<div class="muted" style="padding:16px">No periods for ${day}.</div>`;
+  const grid=$('#ttGrid'); if(!grid) return;
+  const student=ttIsStudent(), admin=ttIsAdmin(), teacher=state.role==='teacher';
+  // Class/section are meaningless for students and parents — the server derives
+  // them from the account link, so hide the controls rather than let them lie.
+  ['ttClass','ttSection','ttSession'].forEach(id=>$('#'+id)?.classList.toggle('hidden',student));
+  $('#ttTabEdit')?.classList.toggle('hidden',!admin);
+  $('#ttTabSettings')?.classList.toggle('hidden',!admin);
+  $('#ttTabHistory')?.classList.toggle('hidden',!admin);
+  const head=$('#ttHeadActions');
+  if(head) head.innerHTML=
+    `<button class="btn-outline" onclick="ttPrint()"><span class="ic" data-icon="file-text"></span> Print</button>`+
+    `<button class="btn-outline" onclick="ttPdf()"><span class="ic" data-icon="file-down"></span> PDF</button>`;
+  if(!$('#ttDate').value) $('#ttDate').value=new Date().toISOString().slice(0,10);
+  if(!ttState.sessions.length){
+    try{ ttState.sessions=await api('/api/sessions'); }catch(e){ ttState.sessions=[]; }
+    const sel=$('#ttSession');
+    if(sel) sel.innerHTML=ttState.sessions.map(s=>`<option value="${s.id}">${esc(s.name)}${s.active?' • active':''}</option>`).join('');
+  }
+  // Admins get a concrete class so the grid is never blank on first open;
+  // teachers default to "My periods" (no class selected) instead.
+  if(admin && !$('#ttClass').value && (state.classes||[]).length){
+    $('#ttClass').value=state.classes[0].id;
+    filterSection('#ttSection');
+    const s=$('#ttSection'); if(s&&s.options.length>1) s.value=s.options[1].value;
+  }
+  grid.innerHTML='<div class="sk-wrap">'+Array(6).fill('<div class="sk sk-row"></div>').join('')+'</div>';
+  $('#ttToday').innerHTML=''; $('#ttLegend').innerHTML='';
+  let p;
+  try{ p=await api('/api/timetable/schedule?'+ttQuery()); }
+  catch(e){
+    grid.innerHTML=ttEmpty('triangle-alert','Could not load the timetable',e.message||'Please try again.');
+    paintIcons(document); return;
+  }
+  ttState.payload=p;
+  const mine = teacher && !$('#ttClass').value;
+  const t=$('#ttTitle'), s=$('#ttSub');
+  if(t) t.textContent = mine ? 'My Timetable'
+    : (p.scope?.class_name ? `Class ${p.scope.class_name}-${p.scope.section_name}` : 'Timetable');
+  if(s) s.textContent = p.published
+    ? `Effective from ${esc(p.version?.effective_from||'')}${p.version?.name?' • '+esc(p.version.name):''}`
+    : 'No timetable has been published for this class yet.';
+  ttStrip(p); ttLegend(p); ttGrid(p);
+  paintIcons(document);
 }
-async function addTimetable(){
-  if(state.role!=='admin') return toast('Admin only',false);
-  const payload={day:$('#ttDay').value, period_time:$('#ttTime').value, subject_name:$('#ttSubject').value, class_id:$('#ttClass').value||null, section_id:$('#ttSection').value||null, room:$('#ttRoom').value};
-  try{ await api('/api/timetable',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); loadTimetable(); toast('Period added'); }catch(e){ toast(e.message,false); }
+
+function ttStrip(p){
+  const el=$('#ttToday'); if(!el) return;
+  if(p.link_required){
+    el.innerHTML=ttEmpty('user-check','Staff account not linked',
+      p.message||'Ask an administrator to link your account to a teaching record.');
+    return;
+  }
+  const bits=[];
+  const hol=(p.holidays||[]).find(h=>h.date===p.date);
+  if(hol) bits.push(`<div class="st holiday"><span class="ic" data-icon="calendar"></span>`+
+    `<span><b>${esc(hol.name)}</b> — no classes today</span></div>`);
+  if(p.current_slot){
+    const c=p.current_slot;
+    bits.push(`<div class="st live"><span class="ic" data-icon="clock"></span>`+
+      `<span>Now: <b>${esc(c.subject_name||c.name||'')}</b> ${esc(c.start_time)}–${esc(c.end_time)}</span></div>`);
+  }else if(p.next_slot){
+    const c=p.next_slot;
+    bits.push(`<div class="st"><span class="ic" data-icon="clock"></span>`+
+      `<span>Next: <b>${esc(c.subject_name||c.name||'')}</b> at ${esc(c.start_time)}</span></div>`);
+  }else if(p.published){
+    bits.push(`<div class="st"><span class="ic" data-icon="clock"></span>`+
+      `<span>No more periods on ${esc(p.weekday||'this day')}</span></div>`);
+  }
+  (p.substitutions||[]).forEach(s=>{
+    bits.push(`<div class="st"><span class="ic" data-icon="refresh-cw"></span><span>`+
+      `<b>${esc(s.substitute_name||'')}</b> covers ${esc(s.original_name||'')}'s `+
+      `${esc(s.slot_name||'period')} • ${esc(s.start_time)}–${esc(s.end_time)}</span></div>`);
+  });
+  el.innerHTML = bits.length ? `<div class="tt-strip">${bits.join('')}</div>`
+    : `<div class="muted" style="font-size:13.5px">${p.published?'No schedule highlights for today.':'Nothing scheduled yet.'}</div>`;
 }
+
+function ttLegend(p){
+  const el=$('#ttLegend'); if(!el) return;
+  const names=new Set();
+  (p.days||[]).forEach(d=>(d.slots||[]).forEach(s=>{ if(s.subject_name) names.add(s.subject_name); }));
+  if(!names.size){ el.innerHTML=''; el.classList.add('hidden'); return; }
+  el.classList.remove('hidden');
+  el.innerHTML=`<div class="tt-legend">`+
+    [...names].sort().map(n=>`<span><i class="tt-swatch" style="background:${ttColor(n)}"></i>${esc(n)}</span>`).join('')+
+    `<span><i class="tt-swatch" style="background:#fffbeb;box-shadow:inset 0 0 0 1px #f59e0b"></i> Break / Lunch</span>`+
+    `</div>`;
+}
+
+function ttGrid(p){
+  const grid=$('#ttGrid'); if(!grid) return;
+  const days=p.days||[];
+  const starts=new Set();
+  days.forEach(d=>(d.slots||[]).forEach(s=>starts.add(s.start_time)));
+  const times=[...starts].sort();
+  if(!times.length){
+    grid.innerHTML=ttEmpty('calendar','No timetable published yet',
+      ttIsAdmin()?'Open the Edit tab to build a week, then publish it.'
+                 :'Your school has not published a timetable for this class yet.');
+    return;
+  }
+  // Rows are time bands: each starts at its own time and ends where the next one begins.
+  const bands=times.map((t,i)=>({start:t,end:i+1<times.length?times[i+1]:null}));
+  const lastEnd=days.flatMap(d=>(d.slots||[]).map(s=>s.end_time)).filter(Boolean).sort().slice(-1)[0];
+  const ws=ttWeekStart(p.date);
+  const MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const colDates=days.map((d,i)=>ttAddDays(ws,i));
+  let html=`<div class="tt-grid" style="grid-template-columns:96px repeat(${days.length},minmax(150px,1fr))">`;
+  html+=`<div class="tt-h tt-time">Time</div>`;
+  days.forEach((d,i)=>{
+    const cd=colDates[i], dt=new Date(cd+'T00:00:00');
+    const isSel=(cd===p.date);
+    html+=`<div class="tt-h">${esc(d.day)}<small>${dt.getDate()} ${MON[dt.getMonth()]}${isSel?' • shown':''}</small></div>`;
+  });
+  times.forEach(t=>{
+    const b=bands.find(x=>x.start===t);
+    const bandEnd=b.end||(lastEnd&&lastEnd>t?lastEnd:null);
+    html+=`<div class="tt-time">${esc(t)}${bandEnd?'<br>'+esc(bandEnd):''}</div>`;
+    days.forEach((d,i)=>{
+      const s=(d.slots||[]).find(x=>x.start_time===t);
+      html+=ttCell(s,p,d.day,colDates[i]);
+    });
+  });
+  html+='</div>';
+  grid.innerHTML=html;
+}
+
+function ttCell(s,p,day,colDate){
+  if(!s) return `<div class="tt-cell is-empty" title="Free period"></div>`;
+  const cls=['tt-cell'];
+  if(s.kind&&s.kind!=='period') cls.push('is-break');
+  if(s.status==='cancelled') cls.push('is-cancelled');
+  const isNow=!!(p.current_slot && p.current_slot.day===day && p.current_slot.start_time===s.start_time);
+  if(isNow) cls.push('is-now');
+  if(s.substitute_name) cls.push('is-sub');
+  const label=s.subject_name||s.name||'';
+  const sw=(s.kind==='period')?`<i class="tt-swatch" style="background:${ttColor(label)}"></i>`:'';
+  const meta=[];
+  if(p.scope?.view==='mine'&&s.class_name) meta.push(`<span>Class ${esc(s.class_name)}-${esc(s.section_name||'')}</span>`);
+  if(s.substitute_name) meta.push(`<span><b>${esc(s.substitute_name)}</b> replacing ${esc(s.teacher_name||'')}</span>`);
+  else if(s.teacher_name) meta.push(`<span>${esc(s.teacher_name)}</span>`);
+  if(s.room) meta.push(`<span><span class="ic" data-icon="map-pin"></span>${esc(s.room)}</span>`);
+  if(isNow) meta.push(`<span class="tt-tag now">Now</span>`);
+  if(s.substitute_name) meta.push(`<span class="tt-tag sub">Substitute</span>`);
+  if(s.status==='cancelled') meta.push(`<span class="tt-tag off">Cancelled</span>`);
+  return `<div class="${cls.join(' ')}" title="${escAttr(label+' '+s.start_time+'–'+s.end_time)}">`+
+    `<div class="tt-sub">${sw}<span>${esc(label)}</span></div>`+
+    (meta.length?`<div class="tt-meta">${meta.join('')}</div>`:'')+
+    `<div class="tt-meta muted">${esc(s.start_time)}–${esc(s.end_time)}</div></div>`;
+}
+
+function ttClassChanged(){ filterSection('#ttSection'); loadTimetable(); }
+function ttPrint(){ window.print(); }
+function ttPdf(){ window.open('/api/timetable/pdf?'+ttQuery(),'_blank','noopener'); }
+
+function ttTab(name){
+  ttState.tab=name;
+  document.querySelectorAll('#ttTabs button').forEach(b=>b.classList.toggle('active',b.dataset.ttTab===name));
+  ['grid','edit','settings','history'].forEach(n=>$('#ttp-'+n)?.classList.toggle('hidden',n!==name));
+  if(name==='edit') ttLoadRefData().then(ttLoadVersions);
+  if(name==='settings') ttLoadSettings();
+  if(name==='history') ttLoadHistory();
+}
+async function ttLoadRefData(){
+  if(ttState.metaLoaded) return;
+  try{
+    const [s,t]=await Promise.all([api('/api/subjects'), api('/api/teachers')]);
+    ttState.subjects=Array.isArray(s)?s:(s.subjects||[]);
+    ttState.teachers=Array.isArray(t)?t:(t.teachers||[]);
+    ttState.metaLoaded=true;
+  }catch(e){ /* leave the lists empty; the selects still render */ }
+}
+async function ttLoadVersions(){
+  const sel=$('#ttvSelect');
+  const cid=$('#ttClass')?.value, sid=$('#ttSection')?.value;
+  if(!cid||!sid){
+    if(sel) sel.innerHTML='<option value="">Choose a class and section first</option>';
+    ttState.version=null; ttState.rows=[]; ttMeta(); ttRows(); return;
+  }
+  let list=[];
+  try{ list=await api(`/api/timetable/versions?class_id=${cid}&section_id=${sid}`); }catch(e){
+    if(sel) sel.innerHTML='<option value="">Could not load timetables</option>';
+    return;
+  }
+  ttState.versions=list;
+  if(!list.length){
+    if(sel) sel.innerHTML='<option value="">No timetables yet — create a draft</option>';
+    ttState.version=null; ttState.versionId=null; ttState.rows=[]; ttMeta(); ttRows(); return;
+  }
+  const keep=list.find(v=>v.id===ttState.versionId)||list[0];
+  if(sel) sel.innerHTML=list.map(v=>
+    `<option value="${v.id}"${v.id===keep.id?' selected':''}>#${v.id} • ${esc(v.name||'Untitled')} • ${esc(v.status)} • eff ${esc(v.effective_from)} • ${v.slot_count} cells</option>`).join('');
+  await ttLoadVersion();
+}
+async function ttLoadVersion(){
+  const vid=$('#ttvSelect')?.value;
+  if(!vid){ ttState.version=null; ttState.rows=[]; ttMeta(); ttRows(); return; }
+  let d;
+  try{ d=await api('/api/timetable/versions/'+vid); }
+  catch(e){ toast(e.message,false); return; }
+  ttState.version=d.version; ttState.versionId=+vid;
+  ttState.rows=(d.slots||[]).map(s=>({
+    day:s.day,start_time:s.start_time,end_time:s.end_time,name:s.name||'',kind:s.kind||'period',
+    subject_id:s.subject_id,teacher_id:s.teacher_id,substitute_teacher_id:s.substitute_teacher_id||null,
+    room:s.room||'',status:s.status||'active',cancel_reason:s.cancel_reason||'',notes:s.notes||''
+  }));
+  ttMeta(); ttRows(); ttErrorsShow(null,null);
+}
+function ttMeta(){
+  const v=ttState.version, el=$('#ttEditMeta'); if(!el) return;
+  if(!v){ el.innerHTML='<div class="muted">Select or create a draft to start editing.</div>'; return; }
+  const pub=v.status==='published';
+  const pubBtn=$('#ttPublishBtn'); if(pubBtn) pubBtn.classList.toggle('hidden',pub);
+  el.innerHTML=`<div class="tt-form"><div class="tt-fgrid">
+      <div class="tt-field"><label>Name</label>
+        <input id="ttvName" value="${escAttr(v.name||'')}" placeholder="e.g. Term 1" ${pub?'disabled':''}></div>
+      <div class="tt-field"><label>Effective from</label>
+        <input id="ttvEff" type="date" value="${escAttr(v.effective_from||'')}" ${pub?'disabled':''}></div>
+      <div class="tt-field"><label>Status</label><input value="${esc(v.status)}" disabled></div>
+    </div>
+    ${pub?`<p class="muted" style="font-size:13px;margin:0">Published timetables are locked so the
+      change history stays accurate. Use <b>Duplicate</b> to make an editable draft.</p>`:''}
+  </div>`;
+}
+function ttRows(){
+  const wrap=$('#ttRows'); if(!wrap) return;
+  const v=ttState.version;
+  const locked=!v||v.status==='published';
+  if(!ttState.rows.length){
+    wrap.innerHTML=`<div class="muted" style="padding:14px 0">No periods yet — use <b>Add period</b> to build the week.</div>`;
+    return;
+  }
+  const subs=[{v:'',t:'—'}].concat(ttState.subjects.map(s=>({v:s.id,t:s.name})));
+  const teas=[{v:'',t:'—'}].concat(ttState.teachers.map(t=>({v:t.id,t:t.name})));
+  const days=TT_DAYS.map(d=>({v:d,t:d.slice(0,3)}));
+  const kinds=TT_KINDS.map(k=>({v:k,t:k[0].toUpperCase()+k.slice(1)}));
+  const sts=[{v:'active',t:'Active'},{v:'cancelled',t:'Cancelled'}];
+  wrap.innerHTML=`<div class="tt-rowhead"><span>Day</span><span>Start</span><span>End</span>`+
+    `<span>Subject</span><span>Teacher</span><span>Room</span><span>Type</span><span>Status</span><span></span></div>`+
+    `<div class="tt-rows">${ttState.rows.map((r,i)=>{
+      const dis=locked?' disabled':'';
+      return `<div class="tt-row">
+        <select onchange="ttField(${i},'day',this.value)"${dis}>${ttOpts(days,r.day)}</select>
+        <input type="time" value="${escAttr(r.start_time)}" onchange="ttField(${i},'start_time',this.value)"${dis}>
+        <input type="time" value="${escAttr(r.end_time)}" onchange="ttField(${i},'end_time',this.value)"${dis}>
+        <select onchange="ttField(${i},'subject_id',this.value)"${dis}>${ttOpts(subs,r.subject_id)}</select>
+        <select onchange="ttField(${i},'teacher_id',this.value)"${dis}>${ttOpts(teas,r.teacher_id)}</select>
+        <input value="${escAttr(r.room||'')}" placeholder="Room" onchange="ttField(${i},'room',this.value)"${dis}>
+        <select onchange="ttField(${i},'kind',this.value)"${dis}>${ttOpts(kinds,r.kind)}</select>
+        <select onchange="ttField(${i},'status',this.value)"${dis}>${ttOpts(sts,r.status||'active')}</select>
+        <button class="tt-kill" onclick="ttDelRow(${i})" title="Remove period"${dis}>`+
+          `<span class="ic" data-icon="trash-2"></span></button>
+      </div>`;
+    }).join('')}</div>`;
+  paintIcons(wrap);
+}
+function ttField(i,k,v){
+  const r=ttState.rows[i]; if(!r) return;
+  if(k==='subject_id'||k==='teacher_id') r[k]=v?+v:null;
+  else r[k]=v;
+  if(k==='kind'){
+    r.name = v==='period' ? (ttState.subjects.find(s=>s.id===r.subject_id)?.name||'')
+                          : v[0].toUpperCase()+v.slice(1);
+    if(v!=='period'){ r.subject_id=null; r.teacher_id=null; ttRows(); }
+  }
+  if(k==='subject_id'&&v){
+    const s=ttState.subjects.find(x=>x.id===+v);
+    if(s) r.name=s.name;
+  }
+}
+function ttAddRow(){
+  const v=ttState.version;
+  if(!v) return toast('Create or select a draft first',false);
+  if(v.status==='published') return toast('Published timetables are locked — duplicate to edit',false);
+  const monday=ttState.rows.filter(r=>r.day==='Monday').sort((a,b)=>a.start_time.localeCompare(b.start_time));
+  const last=monday[monday.length-1];
+  const st=last?ttAddMin(last.end_time,15):'08:00';
+  ttState.rows.push({day:'Monday',start_time:st,end_time:ttAddMin(st,45),name:'',kind:'period',
+    subject_id:null,teacher_id:null,substitute_teacher_id:null,room:'',status:'active',
+    cancel_reason:'',notes:''});
+  ttRows();
+}
+function ttDelRow(i){
+  if(!ttState.rows[i]) return;
+  ttState.rows.splice(i,1);
+  ttRows();
+}
+function ttErrorsShow(errs,warns){
+  const el=$('#ttErrors'); if(!el) return;
+  const E=errs||[], W=warns||[];
+  if(!E.length && !W.length){ el.classList.add('hidden'); el.innerHTML=''; return; }
+  el.classList.remove('hidden');
+  el.innerHTML=`<h4><span class="ic" data-icon="triangle-alert"></span> `+
+    (E.length?`${E.length} conflict${E.length>1?'s':''} to fix`:'Saved with warnings')+`</h4><ul>`+
+    E.map(e=>`<li><span class="ic" data-icon="circle-alert"></span><span>${esc(e.message)}</span></li>`).join('')+
+    W.map(w=>`<li class="ok"><span class="ic" data-icon="info"></span><span>${esc(w.message)}</span></li>`).join('')+
+    `</ul>`;
+  paintIcons(el);
+}
+function ttPayload(){
+  return ttState.rows.map(r=>({
+    day:r.day,start_time:r.start_time,end_time:r.end_time,name:r.name||'',
+    kind:r.kind||'period',subject_id:r.subject_id,teacher_id:r.teacher_id,
+    substitute_teacher_id:r.substitute_teacher_id||null,room:r.room||'',
+    status:r.status||'active',cancel_reason:r.cancel_reason||'',notes:r.notes||''
+  }));
+}
+async function ttValidate(){
+  const v=ttState.version;
+  if(!v) return toast('Select a draft first',false);
+  let r;
+  try{ r=await api('/api/timetable/validate',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({version_id:v.id,slots:ttPayload()})}); }
+  catch(e){ return toast(e.message,false); }
+  ttErrorsShow(r.errors||[],r.warnings||[]);
+  toast(r.ok?'No conflicts found':`${(r.errors||[]).length} conflict(s) found`, !!r.ok);
+}
+async function ttSave(){
+  const v=ttState.version;
+  if(!v) return toast('Select a draft first',false);
+  if(v.status==='published') return toast('Published timetables are locked — duplicate to edit',false);
+  const put=(body)=>api('/api/timetable/versions/'+v.id,{method:'PUT',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const name=$('#ttvName')?.value, eff=$('#ttvEff')?.value;
+  if(name!==undefined && name!==(v.name||'')){ try{ await put({name}); }catch(e){ return toast(e.message,false); } }
+  if(eff && eff!==v.effective_from){ try{ await put({effective_from:eff}); }catch(e){ return toast(e.message,false); } }
+  let res;
+  try{
+    res=await api('/api/timetable/versions/'+v.id+'/slots',{method:'PUT',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({slots:ttPayload()})});
+  }catch(e){
+    const b=e.body||{};
+    ttErrorsShow(b.errors||[{code:'error',message:e.message}],b.warnings||[]);
+    return toast(e.message||'Save blocked',false);
+  }
+  ttErrorsShow([],res.warnings||[]);
+  toast('Timetable saved');
+  await ttLoadVersions();
+  loadTimetable();
+}
+async function ttNewVersion(){
+  const cid=$('#ttClass')?.value, sid=$('#ttSection')?.value;
+  if(!cid||!sid) return toast('Choose a class and section first',false);
+  try{
+    const r=await api('/api/timetable/versions',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({class_id:+cid,section_id:+sid,name:'New timetable',
+        effective_from:new Date().toISOString().slice(0,10)})});
+    ttState.versionId=r.id;
+    toast('Draft created');
+    await ttLoadVersions();
+    $('#ttvName')?.focus();
+  }catch(e){ toast(e.message,false); }
+}
+async function ttPublish(){
+  const v=ttState.version;
+  if(!v) return toast('Select a draft first',false);
+  if(v.status==='published') return toast('Already published',false);
+  if(!ttState.rows.length) return toast('Add at least one period first',false);
+  const eff=$('#ttvEff')?.value||v.effective_from;
+  if(!confirm(`Publish this timetable from ${eff}? Students, parents and teachers will be notified in-app.`)) return;
+  try{
+    const r=await api('/api/timetable/versions/'+v.id+'/publish',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({effective_from:eff})});
+    const n=r.notifications||{};
+    ttErrorsShow([],r.warnings||[]);
+    toast(`Published • ${n.created||0} in-app notification${(n.created||0)===1?'':'s'}`);
+    await ttLoadVersions();
+    loadTimetable();
+  }catch(e){
+    const b=e.body||{};
+    ttErrorsShow(b.errors||[{code:'error',message:e.message}],[]);
+    toast(e.message||'Publish failed',false);
+  }
+}
+async function ttArchive(){
+  const v=ttState.version;
+  if(!v) return toast('Select a draft first',false);
+  if(v.status==='archived') return toast('Already archived',false);
+  // Archiving is how a published timetable is retired without erasing the
+  // record of what was actually in force.
+  if(!confirm('Archive this timetable? It stops being shown to students and teachers, but stays in the history.')) return;
+  try{
+    await api('/api/timetable/versions/'+v.id+'/archive',{method:'POST'});
+    toast('Archived'); await ttLoadVersions(); loadTimetable();
+  }catch(e){ toast(e.message,false); }
+}
+async function ttDeleteVersion(){
+  const v=ttState.version;
+  if(!v) return toast('Select a draft first',false);
+  if(v.status==='published') return toast('Published timetables cannot be deleted — archive instead',false);
+  if(!confirm('Delete this draft timetable?')) return;
+  try{
+    await api('/api/timetable/versions/'+v.id,{method:'DELETE'});
+    ttState.versionId=null; toast('Deleted'); await ttLoadVersions(); loadTimetable();
+  }catch(e){ toast(e.message,false); }
+}
+async function ttDuplicateOpen(){
+  const el=$('#ttDup'); if(!el) return;
+  const v=ttState.version;
+  if(!v) return toast('Select a timetable first',false);
+  if(el.classList.contains('hidden')){
+    const drafts=ttState.versions.filter(x=>x.status!=='published'&&x.id!==v.id);
+    const cls=(state.classes||[]);
+    el.classList.remove('hidden');
+    el.innerHTML=`<div class="card-head"><h3><span class="ic" data-icon="files"></span> Duplicate</h3>
+      <button class="btn-outline" onclick="$('#ttDup').classList.add('hidden')">Close</button></div>
+      <div class="tt-form">
+        <div><b style="font-size:13px">Copy one day to other days</b>
+          <div class="toolbar" style="margin-top:7px">
+            <select id="dupFrom">${ttOpts(TT_DAYS.map(d=>({v:d,t:d})),v.status==='published'?'Monday':'')}</select>
+            ${TT_DAYS.map(d=>`<label style="font-size:12.5px"><input type="checkbox" value="${d}" class="dupTo"> ${d.slice(0,3)}</label>`).join('')}
+            <button class="btn-outline" onclick="ttDupDay()">Copy day</button>
+          </div></div>
+        <div><b style="font-size:13px">Copy this week into another draft</b>
+          <div class="toolbar" style="margin-top:7px">
+            <select id="dupWeek">${drafts.length?ttOpts(drafts.map(x=>({v:x.id,t:`#${x.id} ${x.name||'Untitled'} (${x.status})`})),drafts[0]?.id):'<option value="">No other drafts</option>'}</select>
+            <button class="btn-outline" onclick="ttDupWeek()">Copy week</button>
+          </div></div>
+        <div><b style="font-size:13px">Copy this week into another class</b>
+          <p class="muted" style="font-size:12.5px;margin:4px 0 7px">The day structure is copied; teachers
+            and rooms are cleared so you can assign the right staff (a teacher can only cover one class at a time).</p>
+          <div class="toolbar">
+            <select id="dupClass">${ttOpts(cls.map(c=>({v:c.id,t:'Class '+c.name})),cls[0]?.id)}</select>
+            <select id="dupSection"></select>
+            <input type="date" id="dupEff" value="${new Date().toISOString().slice(0,10)}">
+            <button class="btn-outline" onclick="ttDupClass()">Copy to class</button>
+          </div></div>
+      </div>`;
+    const cs=$('#dupClass');
+    if(cs){
+      const fill=()=>{ const c=cls.find(x=>x.id==cs.value); $('#dupSection').innerHTML=ttOpts((c?.sections||[]).map(s=>({v:s.id,t:s.name})),c?.sections?.[0]?.id); };
+      cs.onchange=fill; fill();
+    }
+    paintIcons(el);
+    return;
+  }
+  el.classList.add('hidden');
+}
+function ttDupDay(){
+  const v=ttState.version;
+  const from=$('#dupFrom')?.value;
+  const to=[...document.querySelectorAll('.dupTo:checked')].map(x=>x.value);
+  if(!v||!from||!to.length) return toast('Pick a source day and at least one target',false);
+  api(`/api/timetable/versions/${v.id}/duplicate`,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({mode:'day',from_day:from,to_days:to})})
+    .then(r=>{ toast(`Copied ${from} to ${to.join(', ')}`); ttLoadVersions(); loadTimetable(); })
+    .catch(e=>{ const b=e.body||{}; ttErrorsShow(b.errors||[{code:'error',message:e.message}],[]);
+      toast(e.message||'Copy blocked',false); });
+}
+function ttDupWeek(){
+  const v=ttState.version, to=$('#dupWeek')?.value;
+  if(!v||!to) return toast('Pick a destination draft',false);
+  api(`/api/timetable/versions/${v.id}/duplicate`,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({mode:'week',to_version_id:+to})})
+    .then(r=>{ toast(`Copied ${r.copied} cells`); ttState.versionId=+to; ttLoadVersions(); loadTimetable(); })
+    .catch(e=>{ const b=e.body||{}; ttErrorsShow(b.errors||[{code:'error',message:e.message}],[]);
+      toast(e.message||'Copy blocked',false); });
+}
+function ttDupClass(){
+  const v=ttState.version;
+  const cid=$('#dupClass')?.value, sid=$('#dupSection')?.value, eff=$('#dupEff')?.value;
+  if(!v||!cid||!sid) return toast('Pick a target class and section',false);
+  api(`/api/timetable/versions/${v.id}/duplicate`,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({mode:'class',to_class_id:+cid,to_section_id:+sid,effective_from:eff})})
+    .then(r=>{
+      const cleared=r.cleared_teachers||0;
+      toast(`Copied ${r.copied} cells${cleared?` • ${cleared} need a teacher`:''}`);
+      $('#ttClass').value=cid; filterSection('#ttSection'); $('#ttSection').value=sid;
+      ttState.versionId=r.id;
+      $('#ttDup').classList.add('hidden');
+      ttLoadVersions(); loadTimetable();
+    })
+    .catch(e=>{ const b=e.body||{}; ttErrorsShow(b.errors||[{code:'error',message:e.message}],[]);
+      toast(e.message||'Copy blocked',false); });
+}
+async function ttLoadSettings(){
+  const el=$('#ttSettingsForm'); if(!el) return;
+  let s;
+  try{ s=await api('/api/timetable/settings?'+ttQuery()); }catch(e){ return toast(e.message,false); }
+  const zones=[...new Set([s.timezone,...TT_ZONES])];
+  const work=new Set(s.working_days||TT_DAYS);
+  el.innerHTML=`<div class="card-head"><h3><span class="ic" data-icon="settings"></span> School day</h3></div>
+    <div class="tt-form">
+      <div class="tt-fgrid">
+        <div class="tt-field"><label>Opens</label><input type="time" id="setOpen" value="${escAttr(s.open_time)}"></div>
+        <div class="tt-field"><label>Closes</label><input type="time" id="setClose" value="${escAttr(s.close_time)}"></div>
+        <div class="tt-field"><label>Default period length (minutes)</label>
+          <input type="number" id="setPeriod" min="5" max="240" value="${escAttr(s.period_minutes)}"></div>
+        <div class="tt-field"><label>Timezone</label>
+          <select id="setTz">${ttOpts(zones.map(z=>({v:z,t:z})),s.timezone)}</select></div>
+      </div>
+      <div class="tt-field"><label>Working days</label>
+        <div class="tt-chips">${TT_DAYS.map(d=>`<label><input type="checkbox" class="setDay" value="${d}"${
+          work.has(d)?' checked':''}> ${d}</label>`).join('')}</div></div>
+      <p class="muted" style="font-size:12.5px;margin:0">Applies to ${
+        s.scope==='class'?`Class ${s.class_name||''} only`
+        :s.scope==='global'?'every class (school-wide default)'
+        :'all classes (built-in defaults — nothing saved yet)'}. Periods outside these
+        hours are rejected by the server.</p>
+      <div class="toolbar"><button class="btn-primary" onclick="ttSaveSettings()">`+
+        `<span class="ic" data-icon="circle-check"></span> Save settings</button></div>
+    </div>`;
+  paintIcons(el);
+}
+async function ttSaveSettings(){
+  const days=[...document.querySelectorAll('.setDay:checked')].map(x=>x.value);
+  if(!days.length) return toast('Pick at least one working day',false);
+  const q=ttQuery();
+  try{
+    await api('/api/timetable/settings'+(q?'?'+q:''),{method:'PUT',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({open_time:$('#setOpen').value,close_time:$('#setClose').value,
+        timezone:$('#setTz').value,working_days:days,period_minutes:+$('#setPeriod').value})});
+    toast('Settings saved'); loadTimetable();
+  }catch(e){ toast(e.message,false); }
+}
+async function ttLoadHistory(){
+  const el=$('#ttHistory'); if(!el) return;
+  const q=ttQuery();
+  let rows;
+  try{ rows=await api('/api/timetable/history'+(q?'?'+q:'')); }
+  catch(e){ return toast(e.message,false); }
+  if(!rows.length){
+    el.innerHTML=ttEmpty('scroll-text','No changes yet','Publishing, editing and duplicating a timetable all get recorded here.');
+    paintIcons(el); return;
+  }
+  const ICONS={publish:'upload',create:'plus',edit:'pencil',delete:'trash-2',
+    duplicate:'files',archive:'folder-open',substitute:'refresh-cw',settings:'settings',migrate:'refresh-cw'};
+  el.innerHTML=`<div class="card-head"><h3><span class="ic" data-icon="scroll-text"></span> Change history</h3></div>
+    <div class="tt-hist">${rows.map(h=>{
+      const det=h.detail||{};
+      const extra=[det.effective_from?`eff ${esc(det.effective_from)}`:'',
+        det.slots?`${det.slots} cells`:'',det.cells?`${det.cells} cells`:'',
+        det.cleared_teachers?`${det.cleared_teachers} staff cleared`:'',
+        det.note?esc(det.note):''].filter(Boolean).join(' • ');
+      return `<div class="h"><span class="ic" data-icon="${ICONS[h.action]||'info'}"></span><div class="hb">
+        <b>${esc(h.summary||h.action)}</b>
+        ${h.class_name?`<p>Class ${esc(h.class_name)}-${esc(h.section_name||'')}</p>`:''}
+        ${extra?`<p>${extra}</p>`:''}
+        <time>${esc(h.changed_by_name||'system')} • ${esc((h.changed_at||'').slice(0,16).replace('T',' '))}</time>
+      </div></div>`;
+    }).join('')}</div>`;
+  paintIcons(el);
+}
+
 // ---- HEATMAP ----
 function initHeatmap(){ const el=$('#heatMonth'); if(el && !el.value) el.value=new Date().toISOString().slice(0,7); loadHeatmap(); }
 async function loadHeatmap(){
@@ -1227,7 +1830,7 @@ const MORE_ITEMS={
   admin:['teachers','classes','analytics','notices','notifications','qr','monthly','attcal','homework','exams','calendar','timetable','staff','parents','messages','holidays','complaints','datesheet','heatmap','studentid','reviews','enotes','features','settings','password','profile'],
   teacher:['students','classes','notices','notifications','qr','monthly','attcal','homework','exams','calendar','timetable','holidays','complaints','datesheet','studentid','reviews','enotes','features','password','profile'],
   student:['reports','homework','exams','datesheet','notifications','calendar','timetable','complaints','reviews','holidays','studentid','features','password','profile'],
-  parent:['reports','homework','exams','datesheet','notifications','calendar','complaints','holidays','studentid','features','password','profile']
+  parent:['reports','homework','exams','datesheet','notifications','calendar','timetable','complaints','holidays','studentid','features','password','profile']
 };
 function buildMobileNav(){
   const nav=document.getElementById('mobileNav'); if(!nav) return;

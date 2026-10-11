@@ -1,4 +1,4 @@
-const CACHE='dynamic-curo-v4';
+const CACHE='dynamic-curo-v5';
 const ASSETS=[
   '/',
   '/index.html',

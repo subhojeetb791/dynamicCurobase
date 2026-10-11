@@ -450,11 +450,74 @@
         <div id="teachersTable" class="table-wrap card"></div>
       </section>
       <!-- TIMETABLE -->
+      <!-- TIMETABLE -->
       <section class="view" id="view-timetable">
-        <div class="page-head"><div><h2>Smart Timetable</h2><p>Click Mark Attendance to auto-load class/subject</p></div></div>
-        <div class="card toolbar"><select id="ttDay"><option>Monday</option><option>Tuesday</option><option>Wednesday</option><option>Thursday</option><option>Friday</option><option>Saturday</option></select><button class="btn-primary" onclick="loadTimetable()">Load</button></div>
-        <div id="ttTable" class="table-wrap card"></div>
-        <div class="card" style="margin-top:12px"><h4>Add Period (Admin)</h4><div class="toolbar"><input id="ttTime" type="time" value="09:00"><input id="ttSubject" placeholder="Subject"><select id="ttClass"></select><select id="ttSection"></select><input id="ttRoom" placeholder="Room"><button class="btn-primary" onclick="addTimetable()">Add</button></div></div>
+        <div class="page-head">
+          <div><h2 id="ttTitle">Timetable</h2><p id="ttSub">Weekly schedule</p></div>
+          <div class="toolbar" id="ttHeadActions"></div>
+        </div>
+
+        <!-- Filters -->
+        <div class="card toolbar" id="ttFilters">
+          <select id="ttSession" class="grow" onchange="loadTimetable()"></select>
+          <select id="ttClass" class="grow" onchange="ttClassChanged()"></select>
+          <select id="ttSection" class="grow" onchange="loadTimetable()"></select>
+          <input type="date" id="ttDate" onchange="loadTimetable()" title="Show the timetable in force on this date">
+          <button class="btn-primary" onclick="loadTimetable()"><span class="ic" data-icon="refresh-cw"></span> Refresh</button>
+        </div>
+
+        <!-- Tab strip: everyone sees Timetable; the rest are admin-only -->
+        <div class="seg" id="ttTabs">
+          <button class="active" data-tt-tab="grid" onclick="ttTab('grid')">Timetable</button>
+          <button data-tt-tab="edit" onclick="ttTab('edit')" id="ttTabEdit">Edit</button>
+          <button data-tt-tab="settings" onclick="ttTab('settings')" id="ttTabSettings">Settings</button>
+          <button data-tt-tab="history" onclick="ttTab('history')" id="ttTabHistory">History</button>
+        </div>
+
+        <!-- ===== Grid panel ===== -->
+        <div id="ttp-grid">
+          <!-- Today strip: current period, next, break, holiday, substitutions -->
+          <div id="ttToday" class="card" style="margin-bottom:12px"></div>
+          <div id="ttLegend" class="card" style="margin-bottom:12px"></div>
+          <div id="ttGrid" class="card tt-grid-card"></div>
+        </div>
+
+        <!-- ===== Editor panel (admin) ===== -->
+        <div id="ttp-edit" class="hidden">
+          <div class="card toolbar">
+            <select id="ttvSelect" class="grow" onchange="ttLoadVersion()"></select>
+            <button class="btn-outline" onclick="ttNewVersion()"><span class="ic" data-icon="plus"></span> New draft</button>
+            <button class="btn-outline" onclick="ttDuplicateOpen()"><span class="ic" data-icon="files"></span> Duplicate</button>
+            <button class="btn-green" id="ttPublishBtn" onclick="ttPublish()"><span class="ic" data-icon="upload"></span> Publish</button>
+            <button class="btn-outline" onclick="ttArchive()"><span class="ic" data-icon="folder-open"></span> Archive</button>
+            <button class="btn-red" onclick="ttDeleteVersion()"><span class="ic" data-icon="trash-2"></span> Delete</button>
+          </div>
+          <div id="ttEditMeta" class="card" style="margin-top:12px"></div>
+          <div id="ttDup" class="card hidden" style="margin-top:12px"></div>
+          <div id="ttErrors" class="card tt-conflicts hidden" style="margin-top:12px"></div>
+          <div class="card" style="margin-top:12px">
+            <div class="card-head"><h3><span class="ic" data-icon="list"></span> Periods</h3>
+              <div class="toolbar">
+                <button class="btn-outline" onclick="ttAddRow()"><span class="ic" data-icon="plus"></span> Add period</button>
+                <button class="btn-primary" onclick="ttSave()"><span class="ic" data-icon="circle-check"></span> Save changes</button>
+              </div>
+            </div>
+            <div id="ttRows"></div>
+            <div class="toolbar" style="margin-top:12px">
+              <button class="btn-outline" onclick="ttValidate()"><span class="ic" data-icon="shield-check"></span> Check for conflicts</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== Settings panel (admin) ===== -->
+        <div id="ttp-settings" class="hidden">
+          <div class="card" id="ttSettingsForm"></div>
+        </div>
+
+        <!-- ===== History panel (admin) ===== -->
+        <div id="ttp-history" class="hidden">
+          <div class="card" id="ttHistory"></div>
+        </div>
       </section>
       <!-- HEATMAP -->
       <section class="view" id="view-heatmap">

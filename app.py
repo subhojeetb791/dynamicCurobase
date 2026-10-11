@@ -1,4 +1,4 @@
-import os, sqlite3, hashlib, datetime, json, io, base64, re, functools
+import os, sqlite3, hashlib, hmac, secrets, datetime, json, io, base64, re, functools
 from flask import Flask, request, jsonify, send_from_directory, g, send_file, session
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
@@ -63,6 +63,8 @@ RBAC = {
     "settings":           {"admin":"full", "teacher":"none", "student":"none", "parent":"none"},
     "holidays":           {"admin":"full", "teacher":"view", "student":"view", "parent":"view"},
     "classes":            {"admin":"full", "teacher":"view", "student":"view", "parent":"view"},
+    # Everyone may READ the schedule that concerns them; only admins may shape it.
+    "timetable":          {"admin":"full", "teacher":"view", "student":"view", "parent":"view"},
 }
 
 def init_db():
@@ -157,6 +159,111 @@ def init_db():
         teacher_id INTEGER,
         room TEXT DEFAULT ''
     );
+    -- ================= Timetable Management =================
+    -- A timetable_version is a complete week of one class+section that becomes
+    -- live on `effective_from`. Editing a live version means forking a new draft,
+    -- so published history is never overwritten and change history stays honest.
+    CREATE TABLE IF NOT EXISTS timetable_versions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id INTEGER NOT NULL DEFAULT 1,
+        class_id INTEGER NOT NULL,
+        section_id INTEGER NOT NULL,
+        name TEXT DEFAULT '',
+        status TEXT DEFAULT 'draft' CHECK(status IN ('draft','published','archived')),
+        effective_from TEXT NOT NULL,
+        parent_id INTEGER,
+        created_by INTEGER,
+        created_at TEXT,
+        published_at TEXT,
+        published_by INTEGER,
+        publish_note TEXT DEFAULT '',
+        FOREIGN KEY(session_id) REFERENCES academic_sessions(id) ON DELETE CASCADE,
+        FOREIGN KEY(class_id) REFERENCES classes(id) ON DELETE CASCADE,
+        FOREIGN KEY(section_id) REFERENCES sections(id) ON DELETE CASCADE,
+        FOREIGN KEY(parent_id) REFERENCES timetable_versions(id) ON DELETE SET NULL
+    );
+    -- One row per grid cell. Breaks/lunch are rows too (kind<>'period') so the
+    -- editor and the reader share a single source of truth for the day shape.
+    CREATE TABLE IF NOT EXISTS timetable_slots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        version_id INTEGER NOT NULL,
+        day TEXT NOT NULL,
+        start_time TEXT NOT NULL,
+        end_time TEXT NOT NULL,
+        name TEXT DEFAULT '',
+        kind TEXT DEFAULT 'period' CHECK(kind IN ('period','break','lunch','assembly')),
+        subject_id INTEGER,
+        teacher_id INTEGER,
+        substitute_teacher_id INTEGER,
+        room TEXT DEFAULT '',
+        status TEXT DEFAULT 'active' CHECK(status IN ('active','cancelled')),
+        cancel_reason TEXT DEFAULT '',
+        notes TEXT DEFAULT '',
+        FOREIGN KEY(version_id) REFERENCES timetable_versions(id) ON DELETE CASCADE,
+        FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE SET NULL,
+        FOREIGN KEY(teacher_id) REFERENCES teachers(id) ON DELETE SET NULL,
+        FOREIGN KEY(substitute_teacher_id) REFERENCES teachers(id) ON DELETE SET NULL
+    );
+    -- School-day shape. class_id/section_id NULL = school-wide default; a row for
+    -- a specific class+section overrides it.
+    CREATE TABLE IF NOT EXISTS timetable_settings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id INTEGER NOT NULL DEFAULT 1,
+        class_id INTEGER,
+        section_id INTEGER,
+        open_time TEXT DEFAULT '08:00',
+        close_time TEXT DEFAULT '15:00',
+        timezone TEXT DEFAULT 'Asia/Kolkata',
+        working_days TEXT DEFAULT 'Monday,Tuesday,Wednesday,Thursday,Friday,Saturday',
+        period_minutes INTEGER DEFAULT 45,
+        updated_by INTEGER,
+        updated_at TEXT
+    );
+    -- Append-only audit trail. Never stores credentials or personal data.
+    CREATE TABLE IF NOT EXISTS timetable_changes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        version_id INTEGER,
+        class_id INTEGER,
+        section_id INTEGER,
+        action TEXT NOT NULL,
+        summary TEXT DEFAULT '',
+        detail TEXT DEFAULT '{}',
+        changed_by INTEGER,
+        changed_at TEXT
+    );
+    -- A substitution applies to one concrete DATE (a teacher is away that day),
+    -- while the slot itself is a weekday pattern.
+    CREATE TABLE IF NOT EXISTS timetable_substitutions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        slot_id INTEGER NOT NULL,
+        date TEXT NOT NULL,
+        original_teacher_id INTEGER,
+        substitute_teacher_id INTEGER,
+        reason TEXT DEFAULT '',
+        status TEXT DEFAULT 'approved' CHECK(status IN ('pending','approved','rejected')),
+        requested_by INTEGER,
+        approved_by INTEGER,
+        created_at TEXT,
+        updated_at TEXT,
+        FOREIGN KEY(slot_id) REFERENCES timetable_slots(id) ON DELETE CASCADE,
+        FOREIGN KEY(original_teacher_id) REFERENCES teachers(id) ON DELETE SET NULL,
+        FOREIGN KEY(substitute_teacher_id) REFERENCES teachers(id) ON DELETE SET NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_ttslot ON timetable_slots(version_id, day, start_time);
+    CREATE INDEX IF NOT EXISTS ix_ttslot_day ON timetable_slots(day, start_time);
+    CREATE INDEX IF NOT EXISTS ix_ttslot_teacher ON timetable_slots(teacher_id, day);
+    CREATE INDEX IF NOT EXISTS ix_ttslot_sub ON timetable_slots(substitute_teacher_id, day);
+    CREATE INDEX IF NOT EXISTS ix_ttver_class ON timetable_versions(class_id, section_id, session_id, status, effective_from);
+    -- COALESCE because SQLite treats NULLs as distinct in UNIQUE constraints
+    -- (the same trap that produced duplicate attendance rows).
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_ttset
+        ON timetable_settings(session_id, COALESCE(class_id,-1), COALESCE(section_id,-1));
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_ttsub ON timetable_substitutions(slot_id, date);
+    CREATE INDEX IF NOT EXISTS ix_ttchg ON timetable_changes(class_id, section_id, changed_at);
+    -- At most one PUBLISHED version per effective date (drafts stay unconstrained).
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_ttver_pub
+        ON timetable_versions(session_id, class_id, section_id, effective_from)
+        WHERE status='published';
     CREATE TABLE IF NOT EXISTS attendance_goals (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         scope TEXT DEFAULT 'student',
@@ -622,12 +729,236 @@ def init_db():
                                    (spk, subid, exam, 100, obtained))
     except Exception: pass
 
+    # ---- academic year: timetable_versions.session_id has a real FK to this ----
+    # A database created before academic_sessions existed could be empty, which
+    # would make every timetable insert fail. Seed one only when there is none.
+    try:
+        if db.execute("SELECT COUNT(*) FROM academic_sessions").fetchone()[0] == 0:
+            y = datetime.date.today().year
+            db.execute("""INSERT INTO academic_sessions (name,start_date,end_date,active)
+                          VALUES (?,?,?,1)""", (f"{y}-{str(y+1)[2:]}", f"{y}-04-01", f"{y+1}-03-31"))
+    except Exception: pass
+
+    # ---- one-time import of the legacy flat `timetable` table ---------------
+    # Legacy rows were free-text (`day` + `period_time` like "09:00-10:00") with
+    # no versioning. Copy them into a draft version so no production data is
+    # silently abandoned. Guarded: runs only when legacy rows exist AND the new
+    # table is still empty, so it can never duplicate on later restarts.
+    try:
+        legacy_n = db.execute("SELECT COUNT(*) FROM timetable").fetchone()[0]
+        new_n = db.execute("SELECT COUNT(*) FROM timetable_versions").fetchone()[0]
+        if legacy_n and new_n == 0:
+            def _norm_t(v):
+                v = str(v).strip()
+                m = re.fullmatch(r'(\d{1,2}):(\d{2})', v)
+                if not m: return None
+                h, mi = int(m.group(1)), int(m.group(2))
+                if h > 23 or mi > 59: return None
+                return '%02d:%02d' % (h, mi)
+            def _plus45(t):
+                h, mi = [int(x) for x in t.split(':')]
+                tot = h * 60 + mi + 45
+                return '%02d:%02d' % (tot // 60, tot % 60)
+            now_iso = datetime.datetime.now().isoformat()
+            sid_row = db.execute("SELECT id FROM academic_sessions WHERE active=1 ORDER BY id LIMIT 1").fetchone()
+            sid = sid_row[0] if sid_row else 1
+            imported = skipped = 0
+            for r in db.execute("SELECT * FROM timetable ORDER BY id").fetchall():
+                if not r['class_id'] or not r['day']:
+                    skipped += 1; continue
+                pt = str(r['period_time'] or '').strip()
+                st = en = None
+                m = re.match(r'^(\d{1,2}:\d{2})\s*[-\u2013\u2014]\s*(\d{1,2}:\d{2})$', pt)
+                if m:
+                    st, en = _norm_t(m.group(1)), _norm_t(m.group(2))
+                else:
+                    st = _norm_t(pt)
+                    en = _plus45(st) if st else None
+                if not st or not en or st >= en:
+                    skipped += 1; continue
+                sec = r['section_id']
+                if not sec:
+                    sr = db.execute("SELECT id FROM sections WHERE class_id=? ORDER BY id LIMIT 1", (r['class_id'],)).fetchone()
+                    sec = sr[0] if sr else None
+                if not sec:
+                    skipped += 1; continue
+                ver = db.execute("""SELECT id FROM timetable_versions
+                                    WHERE session_id=? AND class_id=? AND section_id=?
+                                      AND status='draft' AND name='Imported (legacy)'""",
+                                 (sid, r['class_id'], sec)).fetchone()
+                if not ver:
+                    cur = db.execute("""INSERT INTO timetable_versions
+                        (session_id,class_id,section_id,name,status,effective_from,created_by,created_at)
+                        VALUES (?,?,?,?,?,?,?,?)""",
+                        (sid, r['class_id'], sec, 'Imported (legacy)', 'draft',
+                         datetime.date.today().isoformat(), None, now_iso))
+                    ver_id = cur.lastrowid
+                else:
+                    ver_id = ver[0]
+                dup = db.execute("SELECT 1 FROM timetable_slots WHERE version_id=? AND day=? AND start_time=?",
+                                 (ver_id, r['day'], st)).fetchone()
+                if dup:
+                    skipped += 1; continue
+                db.execute("""INSERT INTO timetable_slots
+                    (version_id,day,start_time,end_time,name,kind,subject_id,teacher_id,room)
+                    VALUES (?,?,?,?,?,?,?,?,?)""",
+                    (ver_id, r['day'], st, en, r['subject_name'] or 'Period',
+                     'period', r['subject_id'], r['teacher_id'], r['room'] or ''))
+                imported += 1
+            db.execute("""INSERT INTO timetable_changes
+                (version_id,class_id,section_id,action,summary,detail,changed_at)
+                VALUES (NULL,NULL,NULL,'migrate','Imported legacy timetable rows',?,?)""",
+                (json.dumps({"imported": imported, "skipped": skipped, "source": "timetable"}), now_iso))
+    except Exception: pass
+
+    # ---- profile system: extend users + add the 1:1 profile table ----------
+    # Additive only. Existing user rows keep their values; new columns get
+    # safe defaults so nothing else in the app has to change.
+    for col, typ in [("email","TEXT DEFAULT ''"), ("phone","TEXT DEFAULT ''"),
+                     ("status","TEXT DEFAULT 'active'"),
+                     ("email_verified","INTEGER DEFAULT 0"),
+                     ("updated_at","TEXT"),
+                     # bumped to invalidate every other signed-in device at once
+                     ("auth_epoch","INTEGER DEFAULT 0")]:
+        try: db.execute(f"ALTER TABLE users ADD COLUMN {col} {typ}")
+        except Exception: pass
+    # usernames are already UNIQUE; email must be too, but only for real
+    # addresses (legacy rows all hold '' so a plain UNIQUE would collide).
+    try:
+        db.execute("""CREATE UNIQUE INDEX IF NOT EXISTS ux_users_email
+                      ON users(email) WHERE email <> ''""")
+    except Exception: pass
+    try:
+        db.execute("""CREATE UNIQUE INDEX IF NOT EXISTS ux_users_phone
+                      ON users(phone) WHERE phone <> ''""")
+    except Exception: pass
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS user_profiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER UNIQUE NOT NULL,
+            display_name TEXT DEFAULT '',
+            bio TEXT DEFAULT '',
+            photo TEXT DEFAULT '',
+            cover_photo TEXT DEFAULT '',
+            dob TEXT DEFAULT '',
+            gender TEXT DEFAULT '',
+            pronouns TEXT DEFAULT '',
+            country TEXT DEFAULT '',
+            city TEXT DEFAULT '',
+            language TEXT DEFAULT 'English',
+            interests TEXT DEFAULT '',
+            theme TEXT DEFAULT 'light',
+            socials TEXT DEFAULT '{}',
+            notify_email INTEGER DEFAULT 1,
+            notify_app INTEGER DEFAULT 1,
+            notify_attendance INTEGER DEFAULT 1,
+            notify_notices INTEGER DEFAULT 1,
+            a11y_large_text INTEGER DEFAULT 0,
+            a11y_reduced_motion INTEGER DEFAULT 0,
+            visibility TEXT DEFAULT 'private',
+            show_email INTEGER DEFAULT 0,
+            show_phone INTEGER DEFAULT 0,
+            show_dob INTEGER DEFAULT 0,
+            created_at TEXT,
+            updated_at TEXT,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+    """)
+    # reset tokens: only a hash is stored, never the token itself
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS password_reset_tokens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            token_hash TEXT NOT NULL,
+            kind TEXT DEFAULT 'reset',
+            expires_at TEXT NOT NULL,
+            used INTEGER DEFAULT 0,
+            created_at TEXT,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+    """)
+    try: db.execute("ALTER TABLE password_reset_tokens ADD COLUMN kind TEXT DEFAULT 'reset'")
+    except Exception: pass
+    # every profile row the account may need; created lazily on first read too
+    try:
+        db.execute("""
+            INSERT OR IGNORE INTO user_profiles (user_id, created_at, updated_at)
+            SELECT id, ?, ? FROM users
+             WHERE NOT EXISTS (SELECT 1 FROM user_profiles p WHERE p.user_id = users.id)
+        """, (datetime.datetime.now().isoformat(), datetime.datetime.now().isoformat()))
+    except Exception: pass
+
     db.commit()
     db.close()
 
 init_db()
 
-def hash_pw(p): return hashlib.sha256(p.encode()).hexdigest()
+"""Password hashing.
+
+Historically this app stored a bare SHA-256 digest (unsalted, unslowed), which is
+not an acceptable password hash. We now use PBKDF2-HMAC-SHA256 with a per-user
+random salt and a high iteration count, using only the standard library.
+
+Existing accounts keep working: verify_pw() detects the legacy format and still
+accepts it, and _upgrade_password_hash() transparently re-hashes to PBKDF2 the
+next time the user logs in successfully. No user is locked out and no password
+is ever reset or written to a log.
+"""
+PW_ALGO = 'pbkdf2:sha256'
+PW_ITERATIONS = int(os.environ.get('PW_ITERATIONS', '390000'))
+PW_SALT_BYTES = 16
+
+def hash_pw(p):
+    """Hash a password with PBKDF2-HMAC-SHA256. Format: algo:iters$salt$hash."""
+    salt = secrets.token_hex(PW_SALT_BYTES)
+    digest = hashlib.pbkdf2_hmac('sha256', (p or '').encode('utf-8'),
+                                 bytes.fromhex(salt), PW_ITERATIONS).hex()
+    return '%s:%d$%s$%s' % (PW_ALGO, PW_ITERATIONS, salt, digest)
+
+def _legacy_hash(p):
+    """The pre-upgrade digest, kept only so old accounts can still sign in."""
+    return hashlib.sha256((p or '').encode('utf-8')).hexdigest()
+
+def is_legacy_hash(stored):
+    """True when the stored value is the old bare-SHA-256 format."""
+    if not stored:
+        return False
+    # legacy = 64 lowercase hex chars with no algo/iterations prefix
+    return len(stored) == 64 and '$' not in stored and re.fullmatch(r'[0-9a-f]{64}', stored) is not None
+
+def verify_pw(stored, p):
+    """Constant-time password check that understands both formats."""
+    if not stored:
+        return False
+    if is_legacy_hash(stored):
+        return hmac.compare_digest(stored, _legacy_hash(p))
+    try:
+        head, salt, digest = stored.split('$')
+        algo, iters = head.rsplit(':', 1)
+        if algo != 'pbkdf2:sha256':
+            return False
+        computed = hashlib.pbkdf2_hmac('sha256', (p or '').encode('utf-8'),
+                                       bytes.fromhex(salt), int(iters)).hex()
+        return hmac.compare_digest(computed, digest)
+    except (ValueError, TypeError):
+        return False
+
+def _upgrade_password_hash(db, user_id, stored, p):
+    """Re-hash a legacy digest in place. Best effort — never blocks a login."""
+    try:
+        if is_legacy_hash(stored):
+            db.execute("UPDATE users SET password_hash=? WHERE id=?", (hash_pw(p), user_id))
+            db.commit()
+    except Exception:
+        pass
+
+# Human-readable reasons an account that *authenticated* still cannot start a
+# session. Shown only after a correct password, so nothing leaks publicly.
+_PENDING_STATUS_MSG = {
+    'pending':   "Your account is awaiting approval from the school office.",
+    'rejected':  "This registration was not approved. Please contact the school office.",
+    'suspended': "This account has been suspended. Please contact the school office.",
+}
 
 # ---------- RBAC Helpers ----------
 def get_current_user():
@@ -635,10 +966,22 @@ def get_current_user():
     if not uid:
         return None
     db = get_db()
-    row = db.execute("SELECT id, username, role, permissions, linked_student_id FROM users WHERE id=?", (uid,)).fetchone()
+    row = db.execute("SELECT id, username, role, permissions, linked_student_id, "
+                     "status, auth_epoch FROM users WHERE id=?", (uid,)).fetchone()
     if not row:
         return None
-    return dict(row)
+    d = dict(row)
+    # A pending / rejected / suspended account may never hold a live session.
+    if (d.get('status') or 'active') != 'active':
+        session.clear()
+        return None
+    # auth_epoch lets "sign out everywhere else" invalidate other devices: the
+    # value is baked into each cookie at login, so bumping it on the row makes
+    # every older cookie fail this check on its next request.
+    if int(session.get('epoch') or 0) != int(d.get('auth_epoch') or 0):
+        session.clear()
+        return None
+    return d
 
 def require_roles(*roles):
     def decorator(fn):
@@ -1762,8 +2105,18 @@ def login():
     # role selection from frontend is NOT trusted – we ignore d.get('role')
     row=get_db().execute("SELECT * FROM users WHERE username=?", (u,)).fetchone()
     success=0
-    if row and row['password_hash']==hash_pw(p):
+    if row and verify_pw(row['password_hash'], p):
+        # Credentials are right, but the account may still be awaiting approval.
+        # This message is only ever shown to someone who already proved they
+        # own the password, so it leaks nothing to an attacker.
+        st = row['status'] or 'active'
+        if st != 'active':
+            get_db().execute("INSERT INTO login_history (username,time,success) VALUES (?,?,?)", (u, datetime.datetime.now().isoformat(), 0))
+            get_db().commit()
+            return jsonify({"error": _PENDING_STATUS_MSG.get(
+                st, "This account is not active. Please contact the school office.")}), 403
         success=1
+        _upgrade_password_hash(get_db(), row['id'], row['password_hash'], p)
         get_db().execute("INSERT INTO login_history (username,time,success) VALUES (?,?,?)", (u, datetime.datetime.now().isoformat(), 1))
         get_db().commit()
         _LOGIN_ATTEMPTS.pop(f"login:{ip}", None)
@@ -1771,6 +2124,7 @@ def login():
         session['user_id'] = row['id']
         session['role'] = row['role']
         session['username'] = row['username']
+        session['epoch'] = int(row['auth_epoch'] or 0)
         return jsonify({"ok":True, "user":{"id":row['id'],"username":row['username'],"role":row['role'],"permissions":json.loads(row['permissions'] or '[]'),"linked_student_id":row['linked_student_id']}})
     # failed: rate-limit only failures (do not reveal whether username exists)
     if _rate_limited(f"login:{ip}", limit=10, window=300):
@@ -1824,6 +2178,11 @@ def auth_check():
 
 def _finish_login(row):
     """Create the session for an authenticated users row and return the JSON payload."""
+    st = (row['status'] or 'active') if 'status' in row.keys() else 'active'
+    if st != 'active':
+        # Correct password but the registration has not been approved yet.
+        return jsonify({"error": _PENDING_STATUS_MSG.get(
+            st, "This account is not active. Please contact the school office.")}), 403
     db = get_db()
     db.execute("INSERT INTO login_history (username,time,success) VALUES (?,?,?)",
                (row['username'], datetime.datetime.now().isoformat(), 1))
@@ -1832,6 +2191,7 @@ def _finish_login(row):
     session['user_id'] = row['id']
     session['role'] = row['role']
     session['username'] = row['username']
+    session['epoch'] = int(row['auth_epoch'] or 0) if 'auth_epoch' in row.keys() else 0
     return jsonify({"ok":True, "user":{
         "id":row['id'], "username":row['username'], "role":row['role'],
         "permissions": json.loads(row['permissions'] or '[]'),
@@ -1873,7 +2233,8 @@ def student_login():
     if not user:
         user = db.execute("SELECT * FROM users WHERE role='student' AND lower(username)=lower(?)",
                           (ident,)).fetchone()
-    if user and user['password_hash'] == hash_pw(pw):
+    if user and verify_pw(user['password_hash'], pw):
+        _upgrade_password_hash(db, user['id'], user['password_hash'], pw)
         return _finish_login(user)
     return _login_fail(ident, ip)
 
@@ -1897,7 +2258,8 @@ def parent_login():
     if not user:
         user = db.execute("SELECT * FROM users WHERE role='parent' AND lower(username)=lower(?)",
                           (ident,)).fetchone()
-    if user and user['password_hash'] == hash_pw(pw):
+    if user and verify_pw(user['password_hash'], pw):
+        _upgrade_password_hash(db, user['id'], user['password_hash'], pw)
         return _finish_login(user)
     return _login_fail(ident, ip)
 
@@ -1913,7 +2275,7 @@ def change_password():
         return jsonify({"error":"New password must be at least 6 characters"}), 400
     db = get_db()
     row = db.execute("SELECT password_hash FROM users WHERE id=?", (u['id'],)).fetchone()
-    if not row or row['password_hash'] != hash_pw(cur):
+    if not row or not verify_pw(row['password_hash'], cur):
         return jsonify({"error":"Current password is incorrect"}), 403
     db.execute("UPDATE users SET password_hash=? WHERE id=?", (hash_pw(new), u['id']))
     if u['role'] == 'parent':
@@ -1975,7 +2337,7 @@ def staff_api():
     return jsonify({"ok":True})
 
 # ---------- Teachers (RBAC) ----------
-@app.route('/api/teachers', methods=['GET','POST','DELETE'])
+@app.route('/api/teachers', methods=['GET','POST','PUT','DELETE'])
 def teachers_api():
     db=get_db()
     u=get_current_user()
@@ -1987,12 +2349,65 @@ def teachers_api():
         return jsonify([dict(r) for r in db.execute("SELECT * FROM teachers ORDER BY id DESC").fetchall()])
     if not u or not can(u['role'], "teachers", "full"):
         return jsonify({"error":"Access denied: Admin only"}),403
-    if request.method=='POST':
-        d=request.get_json()
-        db.execute("INSERT INTO teachers (name,email,subject,phone,assigned_class) VALUES (?,?,?,?,?)",
-                   (d.get('name'), d.get('email'), d.get('subject'), d.get('phone'), d.get('assigned_class')))
+
+    def _link_user(payload):
+        """Resolve an optional teacher-account link.
+
+        teachers.user_id is what lets the teacher dashboard find "my periods".
+        Only an existing user with role='teacher' may be linked, and one user
+        cannot be attached to two staff records.
+        """
+        if 'user_id' not in payload:
+            return None, None
+        uid = payload.get('user_id')
+        if uid in (None, '', 0, '0'):
+            return None, None
+        try:
+            uid = int(uid)
+        except (TypeError, ValueError):
+            return None, "user_id must be an integer."
+        row = db.execute("SELECT id, role FROM users WHERE id=?", (uid,)).fetchone()
+        if not row:
+            return None, "That user account does not exist."
+        if row['role'] != 'teacher':
+            return None, "Only accounts with the teacher role can be linked."
+        taken = db.execute("SELECT id FROM teachers WHERE user_id=? ", (uid,)).fetchone()
+        if taken:
+            return None, "That account is already linked to another staff record."
+        return uid, None
+
+    if request.method == 'POST':
+        d = request.get_json() or {}
+        if not (d.get('name') or '').strip():
+            return jsonify({"error":"Name is required."}), 400
+        uid, err = _link_user(d)
+        if err: return jsonify({"error": err}), 400
+        db.execute("INSERT INTO teachers (name,email,subject,phone,assigned_class,user_id) VALUES (?,?,?,?,?,?)",
+                   (d.get('name'), d.get('email'), d.get('subject'), d.get('phone'), d.get('assigned_class'), uid))
         db.commit()
         return jsonify({"ok":True})
+
+    if request.method == 'PUT':
+        d = request.get_json() or {}
+        tid = _tt_int(request.args.get('id'))
+        if not tid: return jsonify({"error":"id is required."}), 400
+        row = db.execute("SELECT * FROM teachers WHERE id=?", (tid,)).fetchone()
+        if not row: return jsonify({"error":"Staff record not found."}), 404
+        uid, err = _link_user(d)
+        if err: return jsonify({"error": err}), 400
+        fields, params = [], []
+        for col in ("name", "email", "subject", "phone", "assigned_class"):
+            if col in d:
+                fields.append(f"{col}=?"); params.append(d.get(col))
+        if 'user_id' in d:
+            fields.append("user_id=?"); params.append(uid)
+        if not fields:
+            return jsonify({"error":"Nothing to update."}), 400
+        params.append(tid)
+        db.execute(f"UPDATE teachers SET {','.join(fields)} WHERE id=?", params)
+        db.commit()
+        return jsonify({"ok":True})
+
     tid=request.args.get('id')
     db.execute("DELETE FROM teachers WHERE id=?", (tid,))
     db.commit()
@@ -2460,39 +2875,230 @@ def alerts_api():
     ]
     return jsonify(alerts)
 
-# ---------- Timetable ----------
+# ---------- Timetable (legacy endpoint, kept for the dashboard) ----------
+def _tt_working_draft(db, u, class_id, section_id, session_id):
+    """Get a draft the admin can safely edit, forking the published one if needed.
+
+    Published timetables are never edited in place — that is what keeps the
+    change history truthful (spec A). Returns (version_id, error_tuple).
+    """
+    now_iso = datetime.datetime.now().isoformat()
+    d = db.execute("""SELECT id FROM timetable_versions
+                       WHERE class_id=? AND section_id=? AND session_id=? AND status='draft'
+                       ORDER BY effective_from DESC, id DESC LIMIT 1""",
+                   (class_id, section_id, session_id)).fetchone()
+    if d: return d['id'], None
+    live = _live_version(db, class_id, section_id, session_id)
+    if live:
+        try:
+            cur = db.execute("""INSERT INTO timetable_versions
+                  (session_id,class_id,section_id,name,status,effective_from,parent_id,created_by,created_at)
+                  VALUES (?,?,?,?,?,?,?,?,?)""",
+                  (session_id, class_id, section_id, "Draft of #%d" % live['id'], 'draft',
+                   datetime.date.today().isoformat(), live['id'], u['id'], now_iso))
+        except sqlite3.IntegrityError:
+            return None, ({"error":"Could not create a draft timetable."}, 409)
+        _tt_write_slots(db, cur.lastrowid,
+                        [dict(r) for r in db.execute("SELECT * FROM timetable_slots WHERE version_id=?",
+                                                     (live['id'],)).fetchall()])
+        _tt_log(db, cur.lastrowid, class_id, section_id, 'create',
+                f"Forked draft from published version #{live['id']}", {"from": live['id']}, u['id'])
+        db.commit()
+        return cur.lastrowid, None
+    cur = db.execute("""INSERT INTO timetable_versions
+          (session_id,class_id,section_id,name,status,effective_from,created_by,created_at)
+          VALUES (?,?,?,?,?,?,?,?)""",
+          (session_id, class_id, section_id, '', 'draft',
+           datetime.date.today().isoformat(), u['id'], now_iso))
+    _tt_log(db, cur.lastrowid, class_id, section_id, 'create', "Created draft timetable",
+            {"session_id": session_id}, u['id'])
+    db.commit()
+    return cur.lastrowid, None
+
 @app.route('/api/timetable', methods=['GET','POST','DELETE'])
 def timetable_api():
-    db=get_db()
-    u=get_current_user()
-    if request.method=='GET':
-        day=request.args.get('day') or datetime.datetime.now().strftime("%A")
-        sql="SELECT t.*, c.name as class_name, s.name as section_name FROM timetable t LEFT JOIN classes c ON c.id=t.class_id LEFT JOIN sections s ON s.id=t.section_id WHERE 1=1 "
-        params=[]
-        if request.args.get('day'): sql+=" AND t.day=?"; params.append(request.args.get('day'))
-        if request.args.get('class_id'): sql+=" AND t.class_id=?"; params.append(request.args.get('class_id'))
-        sql+=" ORDER BY t.period_time"
-        rows=db.execute(sql, params).fetchall()
-        # mark completed if attendance exists for that class today
-        today=datetime.date.today().isoformat()
-        out=[]
+    db = get_db()
+    u = get_current_user()
+    if not u:
+        return jsonify({"error":"Not authenticated"}), 401
+    if request.method == 'GET':
+        if not can(u['role'], 'timetable', 'view'):
+            return jsonify({"error":"Access denied"}), 403
+        day = request.args.get('day') or datetime.datetime.now().strftime("%A")
+        if day not in TT_DAYS:
+            day = datetime.datetime.now().strftime("%A")
+        class_id = _tt_int(request.args.get('class_id'))
+        section_id = _tt_int(request.args.get('section_id'))
+        student_id = _tt_int(request.args.get('student_id'))
+        session_id = _tt_active_session_id(db)
+        today = datetime.date.today().isoformat()
+        subjects, teachers = _tt_names(db)
+
+        rows = []
+        allowed = readable_student_ids(u)
+        if allowed is not None:
+            # students/parents only ever see their own class (spec H) — the class
+            # is derived from the database link, never trusted from the query string
+            class_id, section_id, _, err = _tt_scope(db, u, class_id, section_id, student_id, '')
+            if err: return jsonify(err[0]), err[1]
+            ver = _live_version(db, class_id, section_id, session_id, today)
+            if ver:
+                rows = db.execute("""SELECT sl.*, v.class_id, v.section_id,
+                                            c.name AS class_name, s.name AS section_name
+                                       FROM timetable_slots sl
+                                       JOIN timetable_versions v ON v.id=sl.version_id
+                                       LEFT JOIN classes c ON c.id=v.class_id
+                                       LEFT JOIN sections s ON s.id=v.section_id
+                                      WHERE sl.version_id=? AND sl.day=? ORDER BY sl.start_time""",
+                                  (ver['id'], day)).fetchall()
+        elif u['role'] == 'teacher':
+            tids = _teacher_ids_for_user(db, u)
+            if class_id is None and section_id is None and tids:
+                q = ",".join("?" * len(tids))
+                rows = db.execute(f"""SELECT sl.*, v.class_id, v.section_id,
+                                             c.name AS class_name, s.name AS section_name
+                                        FROM timetable_slots sl
+                                        JOIN timetable_versions v ON v.id=sl.version_id
+                                        LEFT JOIN classes c ON c.id=v.class_id
+                                        LEFT JOIN sections s ON s.id=v.section_id
+                                       WHERE v.status='published' AND v.effective_from<=?
+                                         AND sl.day=? AND sl.teacher_id IN ({q})
+                                       ORDER BY sl.start_time""",
+                                  [today, day] + tids).fetchall()
+            elif class_id is not None:
+                if section_id is None:
+                    sec = db.execute("SELECT id FROM sections WHERE class_id=? ORDER BY id LIMIT 1",
+                                     (class_id,)).fetchone()
+                    section_id = sec[0] if sec else None
+                if not _teacher_teaches(db, tids, class_id, section_id):
+                    return jsonify({"error":"You are not assigned to this class."}), 403
+                ver = _live_version(db, class_id, section_id, session_id, today)
+                if ver:
+                    rows = db.execute("""SELECT sl.*, v.class_id, v.section_id,
+                                                c.name AS class_name, s.name AS section_name
+                                           FROM timetable_slots sl
+                                           JOIN timetable_versions v ON v.id=sl.version_id
+                                           LEFT JOIN classes c ON c.id=v.class_id
+                                           LEFT JOIN sections s ON s.id=v.section_id
+                                          WHERE sl.version_id=? AND sl.day=? ORDER BY sl.start_time""",
+                                      (ver['id'], day)).fetchall()
+        else:
+            # admin: every published class, or one class when explicitly requested
+            if class_id is not None and section_id is not None:
+                vers = [v['id'] for v in db.execute(
+                    "SELECT id FROM timetable_versions WHERE class_id=? AND section_id=? AND status='published' AND effective_from<=?",
+                    (class_id, section_id, today)).fetchall()]
+                if vers:
+                    rows = db.execute("""SELECT sl.*, v.class_id, v.section_id,
+                                                c.name AS class_name, s.name AS section_name
+                                           FROM timetable_slots sl
+                                           JOIN timetable_versions v ON v.id=sl.version_id
+                                           LEFT JOIN classes c ON c.id=v.class_id
+                                           LEFT JOIN sections s ON s.id=v.section_id
+                                          WHERE sl.version_id=? AND sl.day=? ORDER BY sl.start_time""",
+                                      (vers[0], day)).fetchall()
+            else:
+                rows = db.execute("""SELECT sl.*, v.class_id, v.section_id,
+                                            c.name AS class_name, s.name AS section_name
+                                       FROM timetable_slots sl
+                                       JOIN timetable_versions v ON v.id=sl.version_id
+                                       LEFT JOIN classes c ON c.id=v.class_id
+                                       LEFT JOIN sections s ON s.id=v.section_id
+                                      WHERE v.status='published' AND v.effective_from<=?
+                                        AND sl.day=?
+                                      ORDER BY v.class_id, v.section_id, sl.start_time""",
+                                  (today, day)).fetchall()
+        out = []
         for r in rows:
-            d=dict(r)
-            cnt=0
+            d = dict(r)
+            d['period_time'] = "%s-%s" % (r['start_time'], r['end_time'])
+            d['subject_id'] = r['subject_id']
+            d['subject_name'] = subjects.get(r['subject_id']) or r['name'] or ''
+            d['teacher_name'] = teachers.get(r['teacher_id']) or ''
+            d['kind'] = r['kind']
+            d['status'] = r['status']
+            cnt = 0
             if r['class_id']:
-                cnt=db.execute("SELECT COUNT(*) FROM attendance a JOIN students st ON st.id=a.student_id WHERE a.date=? AND st.class_id=?", (today, r['class_id'])).fetchone()[0]
-            d['completed']=cnt>0
+                cnt = db.execute("""SELECT COUNT(*) FROM attendance a
+                                      JOIN students st ON st.id=a.student_id
+                                     WHERE a.date=? AND st.class_id=? AND st.section_id=?""",
+                                 (today, r['class_id'], r['section_id'])).fetchone()[0]
+            d['completed'] = cnt > 0
             out.append(d)
         return jsonify(out)
-    if not u or u['role']!='admin':
-        return jsonify({"error":"Access denied: Admin only"}),403
-    if request.method=='POST':
-        d=request.get_json() or {}
-        db.execute("INSERT INTO timetable (day,period_time,subject_id,subject_name,class_id,section_id,teacher_id,room) VALUES (?,?,?,?,?,?,?,?)",
-                   (d.get('day'), d.get('period_time'), d.get('subject_id'), d.get('subject_name'), d.get('class_id'), d.get('section_id'), d.get('teacher_id'), d.get('room','')))
+
+    # ---- writes: administrators only (spec H) ----
+    if not can(u['role'], 'timetable', 'full'):
+        return jsonify({"error":"Access denied: Admin only"}), 403
+
+    if request.method == 'POST':
+        d = request.get_json(silent=True) or {}
+        class_id, section_id = _tt_int(d.get('class_id')), _tt_int(d.get('section_id'))
+        if not class_id or not section_id:
+            return jsonify({"error":"class_id and section_id are required."}), 400
+        day = str(d.get('day') or '')
+        if day not in TT_DAYS:
+            return jsonify({"error":"day must be a full weekday name."}), 400
+        session_id = _tt_active_session_id(db)
+        settings = _tt_settings(db, session_id, class_id, section_id)
+        start = str(d.get('period_time') or '').strip()
+        if _tt_minutes(start) is None:
+            return jsonify({"error":"period_time must be a clock time in HH:MM format."}), 400
+        mins = _tt_minutes(start) + int(settings['period_minutes'])
+        if mins >= 24 * 60:
+            return jsonify({"error":"That start time leaves no room for a period."}), 400
+        end = _tt_hhmm(mins)
+        subj_id = _tt_int(d.get('subject_id'))
+        if not subj_id and d.get('subject_name'):
+            srow = db.execute("SELECT id FROM subjects WHERE lower(name)=lower(?)",
+                              (str(d.get('subject_name')).strip(),)).fetchone()
+            if srow: subj_id = srow[0]
+        vid, err = _tt_working_draft(db, u, class_id, section_id, session_id)
+        if err: return jsonify(err[0]), err[1]
+        cur_ver = db.execute("SELECT * FROM timetable_versions WHERE id=?", (vid,)).fetchone()
+        existing = [dict(r) for r in db.execute("SELECT * FROM timetable_slots WHERE version_id=?",
+                                                (vid,)).fetchall()]
+        existing = [s for s in existing if not (s['day'] == day and s['start_time'] == start)]
+        new_cell = {"day": day, "start_time": start, "end_time": end,
+                    "name": str(d.get('subject_name') or 'Period')[:80], "kind": "period",
+                    "subject_id": subj_id, "teacher_id": _tt_int(d.get('teacher_id')),
+                    "room": str(d.get('room') or '')[:40], "status": "active"}
+        candidate = existing + [new_cell]
+        errors = _tt_validate_or_409(db, dict(cur_ver), candidate, settings)
+        if errors:
+            db.rollback()
+            return jsonify({"error":"That period conflicts with the existing timetable.",
+                            "errors":errors, "saved":False}), 409
+        try:
+            _tt_write_slots(db, vid, candidate)
+            _tt_log(db, vid, class_id, section_id, 'edit',
+                    f"Added {day} {start} via quick add", {"day": day, "start": start}, u['id'])
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            return jsonify({"error":"Could not save the period.","detail":str(e)[:200]}), 500
+        return jsonify({"ok":True, "version_id":vid})
+
+    tid = _tt_int(request.args.get('id'))
+    if not tid:
+        return jsonify({"error":"id is required."}), 400
+    # prefer the new model, fall back to the legacy flat table
+    # NOTE: sl.* and v.status would both be called "status", and sqlite3.Row
+    # resolves a duplicate name to the FIRST column (the slot's 'active'), which
+    # would silently defeat this published-version guard. Alias both.
+    slot = db.execute("""SELECT sl.*, v.class_id, v.section_id,
+                                v.status AS version_status, sl.status AS slot_status
+                           FROM timetable_slots sl
+                           JOIN timetable_versions v ON v.id=sl.version_id
+                          WHERE sl.id=?""", (tid,)).fetchone()
+    if slot:
+        if slot['version_status'] == 'published':
+            return jsonify({"error":"This timetable is published — duplicate it into a draft to make changes."}), 409
+        db.execute("DELETE FROM timetable_slots WHERE id=?", (tid,))
+        _tt_log(db, slot['version_id'], slot['class_id'], slot['section_id'], 'edit',
+                "Removed a period", {"slot_id": tid}, u['id'])
         db.commit()
         return jsonify({"ok":True})
-    tid=request.args.get('id')
     db.execute("DELETE FROM timetable WHERE id=?", (tid,))
     db.commit()
     return jsonify({"ok":True})
@@ -3055,6 +3661,1309 @@ def homework_api():
     db.execute("DELETE FROM homework WHERE id=?", (hid,))
     db.commit()
     return jsonify({"ok":True})
+
+# =====================================================================
+# ---------- Timetable Management --------------------------------------
+# =====================================================================
+# Design notes
+#   * A `timetable_version` is a whole week for ONE class+section that goes live
+#     on an effective_from date. Editing never overwrites a published version:
+#     admins fork a draft, then publish it. That makes change history truthful.
+#   * Breaks/lunch are ordinary slots with kind<>'period', so the reader, the
+#     editor and the conflict checker share one source of truth for the day shape.
+#   * Every conflict is decided on the server (spec E). The browser may
+#     pre-warn, but it is never the authority.
+
+TT_DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
+TT_KINDS = ("period","break","lunch","assembly")
+
+def _tt_int(v):
+    try:
+        n = int(str(v).strip())
+        return n
+    except (TypeError, ValueError):
+        return None
+
+def _tt_minutes(v):
+    """'09:30' -> 570. Returns None when the value is not a real clock time."""
+    if v is None: return None
+    m = re.fullmatch(r'(\d{1,2}):(\d{2})', str(v).strip())
+    if not m: return None
+    h, mi = int(m.group(1)), int(m.group(2))
+    if h > 23 or mi > 59: return None
+    return h * 60 + mi
+
+def _tt_hhmm(minutes):
+    return '%02d:%02d' % (minutes // 60, minutes % 60)
+
+def _tt_overlap(a1, a2, b1, b2):
+    """Half-open interval overlap: touching edges (10:00 then 10:00) are fine."""
+    return a1 < b2 and b1 < a2
+
+def _tt_now(tz_name):
+    """Wall-clock now in the school's timezone (spec C: current-period highlight)."""
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.datetime.now(ZoneInfo(tz_name or 'Asia/Kolkata'))
+    except Exception:
+        return datetime.datetime.now()
+
+def _tt_active_session_id(db):
+    row = db.execute("SELECT id FROM academic_sessions WHERE active=1 ORDER BY id LIMIT 1").fetchone()
+    if row: return row[0]
+    row = db.execute("SELECT id FROM academic_sessions ORDER BY id DESC LIMIT 1").fetchone()
+    if row: return row[0]
+    # last resort: keep the FK satisfiable even on a stripped database
+    y = datetime.date.today().year
+    cur = db.execute("""INSERT INTO academic_sessions (name,start_date,end_date,active)
+                        VALUES (?,?,?,1)""", (f"{y}-{str(y+1)[2:]}", f"{y}-04-01", f"{y+1}-03-31"))
+    db.commit()
+    return cur.lastrowid
+
+def _tt_settings(db, session_id, class_id=None, section_id=None):
+    """Resolve school-day settings: class+section override > school-wide > defaults."""
+    rows = db.execute("SELECT * FROM timetable_settings WHERE session_id=?", (session_id,)).fetchall()
+    best, scope = None, 'default'
+    if class_id is not None:
+        for r in rows:
+            if r['class_id'] == class_id and r['section_id'] == section_id:
+                best, scope = r, 'class'; break
+        if best is None:
+            for r in rows:
+                if r['class_id'] == class_id and r['section_id'] is None:
+                    best, scope = r, 'class'; break
+    if best is None:
+        for r in rows:
+            if r['class_id'] is None and r['section_id'] is None:
+                best, scope = r, 'global'; break
+    d = dict(best) if best else {}
+    working = d.get('working_days') or 'Monday,Tuesday,Wednesday,Thursday,Friday,Saturday'
+    return {
+        "id": d.get('id'),
+        "session_id": session_id,
+        "class_id": class_id, "section_id": section_id,
+        "open_time": d.get('open_time') or '08:00',
+        "close_time": d.get('close_time') or '15:00',
+        "timezone": d.get('timezone') or 'Asia/Kolkata',
+        "working_days": [x.strip() for x in working.split(',') if x.strip()],
+        "period_minutes": int(d.get('period_minutes') or 45),
+        "scope": scope,
+    }
+
+def _teacher_ids_for_user(db, u):
+    """teachers.id values for a logged-in teacher user.
+
+    teachers.user_id is the intended link but is not populated on every install,
+    so we fall back to an exact, unambiguous name match and otherwise return
+    nothing rather than guessing (guessing would leak another teacher's schedule).
+    """
+    if not u or u['role'] != 'teacher':
+        return []
+    ids = [r[0] for r in db.execute("SELECT id FROM teachers WHERE user_id=?", (u['id'],)).fetchall()]
+    if ids: return ids
+    rows = db.execute("SELECT id FROM teachers WHERE lower(name)=lower(?)", (u['username'],)).fetchall()
+    return [r[0] for r in rows] if len(rows) == 1 else []
+
+def _tt_scope(db, u, class_id, section_id, student_id, view):
+    """Work out which class+section this caller is allowed to read.
+
+    Returns (class_id, section_id, student_id, error) — `error` is a (body, status)
+    tuple to return straight from the route when the caller may not proceed.
+    Students and parents can never choose their own class; it is derived from the
+    database link, so a hand-crafted query string cannot widen access.
+    """
+    allowed = readable_student_ids(u)          # None = unrestricted (admin/teacher)
+    if allowed is not None:                    # student or parent
+        if not allowed:
+            return None, None, None, ({"error":"No student record is linked to this account."}, 403)
+        sid = student_id if (student_id in allowed) else sorted(allowed)[0]
+        srow = db.execute("SELECT id, class_id, section_id FROM students WHERE id=?", (sid,)).fetchone()
+        if not srow or srow['class_id'] is None:
+            return None, None, None, ({"error":"No class is assigned to this student yet."}, 403)
+        return srow['class_id'], srow['section_id'], sid, None
+    if u['role'] == 'teacher':
+        tids = _teacher_ids_for_user(db, u)
+        if view == 'mine' or class_id is None:
+            return None, None, None, None          # teacher: own-week view
+        if section_id is None:
+            sec = db.execute("SELECT id FROM sections WHERE class_id=? ORDER BY id LIMIT 1",
+                             (class_id,)).fetchone()
+            section_id = sec[0] if sec else None
+        if section_id is None:
+            return None, None, None, ({"error":"That class has no sections."}, 400)
+        if not _teacher_teaches(db, tids, class_id, section_id):
+            return None, None, None, ({"error":"You are not assigned to this class."}, 403)
+        return class_id, section_id, None, None
+    # admin
+    if class_id is None or section_id is None:
+        sec = db.execute("""SELECT s.class_id, s.id FROM sections s
+                            ORDER BY s.class_id, s.id LIMIT 1""").fetchone()
+        if not sec:
+            return None, None, None, ({"error":"No classes configured yet."}, 400)
+        class_id, section_id = sec['class_id'], sec['id']
+    return class_id, section_id, None, None
+
+def _teacher_teaches(db, tids, class_id, section_id):
+    if not tids: return False
+    q = ",".join("?" * len(tids))
+    row = db.execute(f"""SELECT 1 FROM timetable_slots sl
+                           JOIN timetable_versions v ON v.id = sl.version_id
+                          WHERE sl.teacher_id IN ({q})
+                            AND v.class_id=? AND v.section_id=? AND v.status<>'archived'
+                          LIMIT 1""", list(tids) + [class_id, section_id]).fetchone()
+    return row is not None
+
+def _live_version(db, class_id, section_id, session_id, on_date=None):
+    """The published version in force on `on_date` (latest effective_from <= date)."""
+    on_date = on_date or datetime.date.today().isoformat()
+    return db.execute("""SELECT * FROM timetable_versions
+                          WHERE class_id=? AND section_id=? AND session_id=?
+                            AND status='published' AND effective_from<=?
+                          ORDER BY effective_from DESC, id DESC LIMIT 1""",
+                      (class_id, section_id, session_id, on_date)).fetchone()
+
+def _tt_log(db, version_id, class_id, section_id, action, summary, detail, changed_by):
+    db.execute("""INSERT INTO timetable_changes
+                  (version_id,class_id,section_id,action,summary,detail,changed_by,changed_at)
+                  VALUES (?,?,?,?,?,?,?,?)""",
+               (version_id, class_id, section_id, action, summary[:300],
+                json.dumps(detail or {}, ensure_ascii=False),
+                changed_by, datetime.datetime.now().isoformat()))
+
+# ---------------- Conflict detection (server-side authority) ----------------
+def _validate_tt_slots(db, ver, slots, settings):
+    """Validate a proposed week. Returns a list of problems (empty = safe to save).
+
+    codes: bad_day | non_working_day | invalid_time | outside_hours |
+           unknown_subject | unknown_teacher | class_overlap |
+           teacher_conflict | room_conflict
+    """
+    problems, seen = [], set()
+    def add(code, message, idx, extra=None):
+        key = (code, idx, message)
+        if key in seen: return
+        seen.add(key)
+        p = {"code": code, "message": message, "slot_index": idx}
+        if extra: p.update(extra)
+        problems.append(p)
+
+    open_m = _tt_minutes(settings.get('open_time'))
+    close_m = _tt_minutes(settings.get('close_time'))
+    if open_m is None: open_m = 0
+    if close_m is None: close_m = 24 * 60
+    working = settings.get('working_days') or []
+
+    subj_ids = {r[0] for r in db.execute("SELECT id FROM subjects").fetchall()}
+    teach_ids = {r[0] for r in db.execute("SELECT id FROM teachers").fetchall()}
+
+    norm = []
+    for i, s in enumerate(slots):
+        day = str(s.get('day') or '').strip()
+        label = str(s.get('name') or '').strip() or (s.get('kind') or 'period').title()
+        st, en = _tt_minutes(s.get('start_time')), _tt_minutes(s.get('end_time'))
+        e = {"index": i, "day": day, "name": label, "start": st, "end": en,
+             "kind": s.get('kind') if s.get('kind') in TT_KINDS else 'period',
+             "teacher_id": _tt_int(s.get('teacher_id')),
+             "subject_id": _tt_int(s.get('subject_id')),
+             "room": str(s.get('room') or '').strip(),
+             "status": 'active' if (s.get('status') or 'active') == 'active' else 'cancelled'}
+        if day not in TT_DAYS:
+            add("bad_day", f"Cell {i+1}: '{day}' is not a valid day of the week.", i); continue
+        if working and day not in working:
+            add("non_working_day", f"Cell {i+1}: {day} is not a configured working day.", i)
+        if st is None or en is None:
+            add("invalid_time", f"Cell {i+1}: start and end must be clock times in HH:MM format.", i); continue
+        if st >= en:
+            add("invalid_time", f"Cell {i+1}: end time ({s.get('end_time')}) must be after start time ({s.get('start_time')}).", i); continue
+        if st < open_m or en > close_m:
+            add("outside_hours",
+                f"Cell {i+1}: {s.get('start_time')}-{s.get('end_time')} falls outside school hours "
+                f"({settings.get('open_time')}-{settings.get('close_time')}).", i)
+        if e['subject_id'] and e['subject_id'] not in subj_ids:
+            add("unknown_subject", f"Cell {i+1}: that subject no longer exists.", i)
+        if e['teacher_id'] and e['teacher_id'] not in teach_ids:
+            add("unknown_teacher", f"Cell {i+1}: that teacher no longer exists.", i)
+        norm.append(e)
+
+    # (1) this class cannot have two cells covering the same minutes — this is
+    #     also what catches "two subjects in one period" and "period vs break".
+    active = [e for e in norm if e['status'] == 'active' and e['start'] is not None and e['end'] is not None]
+    for a in range(len(active)):
+        for b in range(a + 1, len(active)):
+            x, y = active[a], active[b]
+            if x['day'] != y['day']: continue
+            if _tt_overlap(x['start'], x['end'], y['start'], y['end']):
+                add("class_overlap",
+                    f"{x['day']}: '{x['name']}' ({_tt_hhmm(x['start'])}-{_tt_hhmm(x['end'])}) overlaps "
+                    f"'{y['name']}' ({_tt_hhmm(y['start'])}-{_tt_hhmm(y['end'])}).",
+                    x['index'], {"conflict_index": y['index']})
+
+    # (2) cross-class: teacher and room clashes against every other live version
+    #     of a DIFFERENT class+section in the same academic year. Other versions
+    #     of this same class are alternatives (draft vs published), not clashes.
+    others = db.execute("""SELECT sl.day, sl.start_time, sl.end_time, sl.name, sl.kind,
+                                  sl.teacher_id, sl.room, sl.status,
+                                  v.class_id, v.section_id,
+                                  c.name AS class_name, s.name AS section_name
+                             FROM timetable_slots sl
+                             JOIN timetable_versions v ON v.id = sl.version_id
+                             LEFT JOIN classes c ON c.id = v.class_id
+                             LEFT JOIN sections s ON s.id = v.section_id
+                            WHERE v.session_id=? AND v.status<>'archived'
+                              AND sl.status='active' AND sl.version_id<>?
+                              AND NOT (v.class_id=? AND v.section_id=?)""",
+                         (ver['session_id'], ver['id'],
+                          ver['class_id'], ver['section_id'])).fetchall()
+    other_rows = []
+    for o in others:
+        os_, oe_ = _tt_minutes(o['start_time']), _tt_minutes(o['end_time'])
+        if os_ is None or oe_ is None or os_ >= oe_: continue
+        other_rows.append({"day": o['day'], "start": os_, "end": oe_,
+                           "teacher_id": o['teacher_id'],
+                           "room": (o['room'] or '').strip(),
+                           "class_label": "%s-%s" % (o['class_name'] or '?', o['section_name'] or '?')})
+
+    for e in active:
+        for o in other_rows:
+            if o['day'] != e['day']: continue
+            if not _tt_overlap(e['start'], e['end'], o['start'], o['end']): continue
+            span = "%s %s-%s" % (e['day'], _tt_hhmm(o['start']), _tt_hhmm(o['end']))
+            if e['teacher_id'] and o['teacher_id'] == e['teacher_id']:
+                tname = db.execute("SELECT name FROM teachers WHERE id=?", (e['teacher_id'],)).fetchone()
+                who = tname[0] if tname else 'That teacher'
+                add("teacher_conflict",
+                    f"{who} is already assigned to {o['class_label']} on {span}.",
+                    e['index'], {"class_label": o['class_label'], "when": span})
+            if e['room'] and o['room'] and e['room'].lower() == o['room'].lower():
+                add("room_conflict",
+                    f"Room {e['room']} is already in use by {o['class_label']} on {span}.",
+                    e['index'], {"class_label": o['class_label'], "when": span})
+    return problems
+
+def _tt_notify(db, ver, slots, summary):
+    """Fan out in-app notifications and report delivery honestly.
+
+    This application has no SMS/e-mail/WhatsApp gateway, so the return value
+    states exactly which channel was used and that nothing external was sent.
+    Never report success for a channel that was not actually contacted.
+    """
+    now = datetime.datetime.now().isoformat()
+    targets = set()
+    for r in db.execute("SELECT id FROM users WHERE role='admin'").fetchall():
+        targets.add(r[0])
+    tids = sorted({s['teacher_id'] for s in slots if s.get('teacher_id')} |
+                  {s['substitute_teacher_id'] for s in slots if s.get('substitute_teacher_id')})
+    if tids:
+        q = ",".join("?" * len(tids))
+        for r in db.execute(f"SELECT user_id FROM teachers WHERE user_id IS NOT NULL AND id IN ({q})", tids):
+            targets.add(r[0])
+    studs = [r[0] for r in db.execute("SELECT id FROM students WHERE class_id=? AND section_id=?",
+                                      (ver['class_id'], ver['section_id'])).fetchall()]
+    if studs:
+        q = ",".join("?" * len(studs))
+        for r in db.execute(f"SELECT id FROM users WHERE linked_student_id IN ({q})", studs):
+            targets.add(r[0])
+        for r in db.execute(f"""SELECT DISTINCT user_id FROM parent_students
+                                WHERE student_id IN ({q}) AND user_id IS NOT NULL""", studs):
+            targets.add(r[0])
+    for uid in sorted(targets):
+        db.execute("INSERT INTO notifications (user_id,type,title,content,date) VALUES (?,?,?,?,?)",
+                   (uid, 'timetable', 'Timetable updated', summary, now))
+    db.commit()
+    return {"created": len(targets), "channel": "in_app",
+            "external_channels": [], "external_sent": False,
+            "note": "In-app notifications only. This app has no SMS, e-mail or WhatsApp gateway configured."}
+
+def _tt_names(db):
+    subjects = {r['id']: r['name'] for r in db.execute("SELECT id,name FROM subjects").fetchall()}
+    teachers = {r['id']: r['name'] for r in db.execute("SELECT id,name FROM teachers").fetchall()}
+    return subjects, teachers
+
+def _tt_enrich(slot, subjects, teachers):
+    d = dict(slot)
+    d['subject_name'] = subjects.get(d.get('subject_id')) or d.get('subject_name') or ''
+    d['teacher_name'] = teachers.get(d.get('teacher_id')) or ''
+    d['substitute_name'] = teachers.get(d.get('substitute_teacher_id')) or ''
+    return d
+
+def _tt_days_list(settings):
+    working = settings.get('working_days') or TT_DAYS[:6]
+    return [d for d in TT_DAYS if d in working]
+
+def _tt_live_payload(db, class_id, section_id, session_id, settings, date_obj, u, student_id=None):
+    subjects, teachers = _tt_names(db)
+    ver = _live_version(db, class_id, section_id, session_id, date_obj.isoformat())
+    days = []
+    slot_rows = []
+    if ver:
+        slot_rows = db.execute("SELECT * FROM timetable_slots WHERE version_id=? ORDER BY start_time",
+                               (ver['id'],)).fetchall()
+    by_day = {}
+    for s in slot_rows:
+        by_day.setdefault(s['day'], []).append(s)
+    for d in _tt_days_list(settings):
+        days.append({"day": d, "slots": [_tt_enrich(s, subjects, teachers) for s in by_day.get(d, [])]})
+
+    cls = db.execute("SELECT name FROM classes WHERE id=?", (class_id,)).fetchone()
+    sec = db.execute("SELECT name FROM sections WHERE id=?", (section_id,)).fetchone()
+
+    now_dt = _tt_now(settings['timezone'])
+    now_min = now_dt.hour * 60 + now_dt.minute
+    today_iso = now_dt.date().isoformat()
+    # `current`/`next` are only meaningful when the requested date IS today —
+    # showing a "Now" badge against some other week would simply be a lie.
+    is_today = (date_obj.isoformat() == today_iso)
+    view_day = date_obj.strftime('%A')
+    todays = [_tt_enrich(s, subjects, teachers) for s in by_day.get(view_day, [])
+              if s['status'] == 'active']
+    current = next((s for s in todays if _tt_minutes(s['start_time']) is not None
+                    and _tt_minutes(s['end_time']) is not None
+                    and _tt_minutes(s['start_time']) <= now_min < _tt_minutes(s['end_time'])), None) if is_today else None
+    upcoming = [s for s in todays if _tt_minutes(s['start_time']) is not None
+                and _tt_minutes(s['start_time']) > now_min] if is_today else []
+
+    week_start = date_obj - datetime.timedelta(days=date_obj.weekday())
+    week_end = week_start + datetime.timedelta(days=6)
+    holidays = [dict(r) for r in db.execute(
+        "SELECT date,name,type FROM holidays WHERE date>=? AND date<=? ORDER BY date",
+        (week_start.isoformat(), week_end.isoformat())).fetchall()]
+
+    subs = []
+    if ver:
+        subs = [dict(r) for r in db.execute("""SELECT sub.*, so.name AS original_name,
+                                                      sn.name AS substitute_name,
+                                                      sl.day, sl.start_time, sl.end_time,
+                                                      sl.name AS slot_name, sl.subject_id
+                                                 FROM timetable_substitutions sub
+                                                 JOIN timetable_slots sl ON sl.id=sub.slot_id
+                                                 LEFT JOIN teachers so ON so.id=sub.original_teacher_id
+                                                 LEFT JOIN teachers sn ON sn.id=sub.substitute_teacher_id
+                                                WHERE sl.version_id=? AND sub.date=? AND sub.status='approved'
+                                                ORDER BY sl.start_time""",
+                                            (ver['id'], date_obj.isoformat())).fetchall()]
+        for s in subs:
+            s['subject_name'] = subjects.get(s.get('subject_id')) or ''
+
+    return {
+        "scope": {"role": u['role'], "class_id": class_id, "section_id": section_id,
+                  "class_name": cls['name'] if cls else '', "section_name": sec['name'] if sec else '',
+                  "student_id": student_id},
+        "session": {"id": session_id},
+        "settings": settings,
+        "version": ({"id": ver['id'], "name": ver['name'], "status": ver['status'],
+                     "effective_from": ver['effective_from'], "published_at": ver['published_at']}
+                    if ver else None),
+        "published": ver is not None,
+        "date": date_obj.isoformat(), "weekday": view_day, "today": today_iso,
+        "now": now_dt.strftime('%H:%M'), "timezone": settings['timezone'],
+        "days": days,
+        "current_slot": current,
+        "next_slot": upcoming[0] if upcoming else None,
+        "holidays": holidays,
+        "substitutions": subs,
+    }
+
+def _tt_teacher_week(db, u, session_id, settings, date_obj):
+    """A teacher's own week across every class they teach (spec B)."""
+    subjects, teachers = _tt_names(db)
+    tids = _teacher_ids_for_user(db, u)
+    if not tids:
+        return {"scope": {"role": "teacher", "view": "mine", "teacher_ids": []},
+                "session": {"id": session_id}, "settings": settings, "version": None,
+                "published": False, "link_required": True,
+                "message": "Your staff account is not linked to a teaching record yet. "
+                           "Ask an administrator to link it so your periods can appear here.",
+                "date": date_obj.isoformat(), "weekday": date_obj.strftime('%A'),
+                "now": _tt_now(settings['timezone']).strftime('%H:%M'),
+                "timezone": settings['timezone'], "days": [],
+                "current_slot": None, "next_slot": None, "holidays": [], "substitutions": []}
+    q = ",".join("?" * len(tids))
+    rows = db.execute(f"""SELECT sl.*, v.class_id, v.section_id, v.effective_from, v.status AS v_status,
+                                 c.name AS class_name, s.name AS section_name
+                            FROM timetable_slots sl
+                            JOIN timetable_versions v ON v.id=sl.version_id
+                            LEFT JOIN classes c ON c.id=v.class_id
+                            LEFT JOIN sections s ON s.id=v.section_id
+                           WHERE v.session_id=? AND v.status='published'
+                             AND v.effective_from<=?
+                             AND (sl.teacher_id IN ({q}) OR sl.substitute_teacher_id IN ({q}))
+                           ORDER BY sl.start_time""",
+                      [session_id, date_obj.isoformat()] + tids + tids).fetchall()
+    by_day = {}
+    for r in rows:
+        d = dict(r)
+        d['subject_name'] = subjects.get(d.get('subject_id')) or ''
+        d['teacher_name'] = teachers.get(d.get('teacher_id')) or ''
+        d['substitute_name'] = teachers.get(d.get('substitute_teacher_id')) or ''
+        d['is_substitution'] = bool(d.get('substitute_teacher_id'))
+        by_day.setdefault(d['day'], []).append(d)
+
+    now_dt = _tt_now(settings['timezone'])
+    now_min = now_dt.hour * 60 + now_dt.minute
+    today_iso = now_dt.date().isoformat()
+    is_today = (date_obj.isoformat() == today_iso)
+    view_day = date_obj.strftime('%A')
+    todays = by_day.get(view_day, [])
+    current = next((s for s in todays if s['status'] == 'active'
+                    and _tt_minutes(s['start_time']) is not None
+                    and _tt_minutes(s['end_time']) is not None
+                    and _tt_minutes(s['start_time']) <= now_min < _tt_minutes(s['end_time'])), None) if is_today else None
+    upcoming = [s for s in todays if s['status'] == 'active'
+                and _tt_minutes(s['start_time']) is not None and _tt_minutes(s['start_time']) > now_min] if is_today else []
+
+    week_start = date_obj - datetime.timedelta(days=date_obj.weekday())
+    week_end = week_start + datetime.timedelta(days=6)
+    holidays = [dict(r) for r in db.execute(
+        "SELECT date,name,type FROM holidays WHERE date>=? AND date<=? ORDER BY date",
+        (week_start.isoformat(), week_end.isoformat())).fetchall()]
+
+    return {
+        "scope": {"role": "teacher", "view": "mine", "teacher_ids": tids},
+        "session": {"id": session_id}, "settings": settings, "version": None,
+        "published": True, "link_required": False,
+        "date": date_obj.isoformat(), "weekday": view_day, "today": today_iso,
+        "now": now_dt.strftime('%H:%M'), "timezone": settings['timezone'],
+        "days": [{"day": d, "slots": by_day.get(d, [])} for d in _tt_days_list(settings)],
+        "current_slot": current, "next_slot": upcoming[0] if upcoming else None,
+        "holidays": holidays, "substitutions": [],
+    }
+
+def _tt_write_slots(db, vid, rows):
+    """Replace every cell of a version. Caller is responsible for validating
+    first and for committing — that keeps validation and persistence separate."""
+    db.execute("DELETE FROM timetable_slots WHERE version_id=?", (vid,))
+    for s in rows:
+        day = str(s.get('day') or '').strip()
+        st, en = str(s.get('start_time') or '').strip(), str(s.get('end_time') or '').strip()
+        kind = s.get('kind') if s.get('kind') in TT_KINDS else 'period'
+        status = 'active' if (s.get('status') or 'active') == 'active' else 'cancelled'
+        db.execute("""INSERT INTO timetable_slots
+            (version_id,day,start_time,end_time,name,kind,subject_id,teacher_id,
+             substitute_teacher_id,room,status,cancel_reason,notes)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (vid, day, st, en, str(s.get('name') or '')[:80], kind,
+             _tt_int(s.get('subject_id')), _tt_int(s.get('teacher_id')),
+             _tt_int(s.get('substitute_teacher_id')), str(s.get('room') or '')[:40],
+             status, str(s.get('cancel_reason') or '')[:200], str(s.get('notes') or '')[:300]))
+
+# ---------------- Timetable routes ----------------
+@app.route('/api/timetable/settings', methods=['GET','PUT'])
+def tt_settings_route():
+    u = get_current_user()
+    if not u: return jsonify({"error":"Not authenticated"}), 401
+    if not can(u['role'], 'timetable', 'view'): return jsonify({"error":"Access denied"}), 403
+    db = get_db()
+    sid = _tt_int(request.args.get('session_id')) or _tt_active_session_id(db)
+    class_id = _tt_int(request.args.get('class_id'))
+    section_id = _tt_int(request.args.get('section_id'))
+    if request.method == 'GET':
+        return jsonify(_tt_settings(db, sid, class_id, section_id))
+    if not can(u['role'], 'timetable', 'full'):
+        return jsonify({"error":"Access denied: only administrators can change timetable settings."}), 403
+    d = request.get_json(silent=True) or {}
+    def _hhmm(v, default):
+        if v is None: return default
+        if _tt_minutes(v) is None:
+            raise ValueError("Times must be in HH:MM format.")
+        return str(v)
+    try:
+        open_t = _hhmm(d.get('open_time'), '08:00')
+        close_t = _hhmm(d.get('close_time'), '15:00')
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    if _tt_minutes(open_t) >= _tt_minutes(close_t):
+        return jsonify({"error":"Opening time must be before closing time."}), 400
+    days = d.get('working_days')
+    if isinstance(days, (list, tuple)):
+        days = ",".join(x for x in days if x in TT_DAYS)
+    if not days:
+        days = "Monday,Tuesday,Wednesday,Thursday,Friday,Saturday"
+    tz = str(d.get('timezone') or 'Asia/Kolkata').strip()
+    try:
+        from zoneinfo import ZoneInfo
+        ZoneInfo(tz)
+    except Exception:
+        return jsonify({"error":f"'{tz}' is not a known timezone."}), 400
+    try:
+        pm = int(d.get('period_minutes') or 45)
+        if pm < 5 or pm > 240: raise ValueError
+    except (TypeError, ValueError):
+        return jsonify({"error":"period_minutes must be between 5 and 240."}), 400
+    existing = db.execute("""SELECT id FROM timetable_settings
+                             WHERE session_id=? AND COALESCE(class_id,-1)=COALESCE(?,-1)
+                               AND COALESCE(section_id,-1)=COALESCE(?,-1)""",
+                          (sid, class_id, section_id)).fetchone()
+    now = datetime.datetime.now().isoformat()
+    if existing:
+        db.execute("""UPDATE timetable_settings SET open_time=?,close_time=?,timezone=?,
+                             working_days=?,period_minutes=?,updated_by=?,updated_at=? WHERE id=?""",
+                   (open_t, close_t, tz, days, pm, u['id'], now, existing['id']))
+    else:
+        db.execute("""INSERT INTO timetable_settings
+                        (session_id,class_id,section_id,open_time,close_time,timezone,working_days,period_minutes,updated_by,updated_at)
+                      VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                   (sid, class_id, section_id, open_t, close_t, tz, days, pm, u['id'], now))
+    _tt_log(db, None, class_id, section_id, 'settings', 'Timetable settings updated',
+            {"open_time": open_t, "close_time": close_t, "timezone": tz, "session_id": sid}, u['id'])
+    db.commit()
+    return jsonify({"ok":True, "settings":_tt_settings(db, sid, class_id, section_id)})
+
+@app.route('/api/timetable/versions', methods=['GET','POST'])
+def tt_versions():
+    u = get_current_user()
+    if not u: return jsonify({"error":"Not authenticated"}), 401
+    if not can(u['role'], 'timetable', 'view'): return jsonify({"error":"Access denied"}), 403
+    db = get_db()
+    if request.method == 'GET':
+        # The version list is the editor's view (drafts, publish dates, notes).
+        # Everyone else reads the published schedule through /schedule instead.
+        if not can(u['role'], 'timetable', 'full'):
+            return jsonify({"error":"Access denied: only administrators can list timetable versions."}), 403
+        class_id = _tt_int(request.args.get('class_id'))
+        section_id = _tt_int(request.args.get('section_id'))
+        status = request.args.get('status') or ''
+        sql = """SELECT v.*, c.name AS class_name, s.name AS section_name,
+                        a.name AS session_name,
+                        (SELECT COUNT(*) FROM timetable_slots sl WHERE sl.version_id=v.id) AS slot_count
+                   FROM timetable_versions v
+                   LEFT JOIN classes c ON c.id=v.class_id
+                   LEFT JOIN sections s ON s.id=v.section_id
+                   LEFT JOIN academic_sessions a ON a.id=v.session_id
+                  WHERE 1=1"""
+        params = []
+        if class_id is not None: sql += " AND v.class_id=?"; params.append(class_id)
+        if section_id is not None: sql += " AND v.section_id=?"; params.append(section_id)
+        if status: sql += " AND v.status=?"; params.append(status)
+        sql += " ORDER BY v.effective_from DESC, v.id DESC LIMIT 200"
+        return jsonify([dict(r) for r in db.execute(sql, params).fetchall()])
+    if not can(u['role'], 'timetable', 'full'):
+        return jsonify({"error":"Access denied: only administrators can create timetables."}), 403
+    d = request.get_json(silent=True) or {}
+    class_id, section_id = _tt_int(d.get('class_id')), _tt_int(d.get('section_id'))
+    if not class_id or not section_id:
+        return jsonify({"error":"class_id and section_id are required."}), 400
+    if not db.execute("SELECT 1 FROM sections WHERE id=? AND class_id=?", (section_id, class_id)).fetchone():
+        return jsonify({"error":"That section does not belong to that class."}), 400
+    session_id = _tt_int(d.get('session_id')) or _tt_active_session_id(db)
+    eff = str(d.get('effective_from') or datetime.date.today().isoformat())
+    try: datetime.date.fromisoformat(eff)
+    except ValueError: return jsonify({"error":"effective_from must be YYYY-MM-DD."}), 400
+    name = str(d.get('name') or '').strip()[:120]
+    try:
+        cur = db.execute("""INSERT INTO timetable_versions
+              (session_id,class_id,section_id,name,status,effective_from,created_by,created_at)
+              VALUES (?,?,?,?,?,?,?,?)""",
+              (session_id, class_id, section_id, name, 'draft', eff, u['id'],
+               datetime.datetime.now().isoformat()))
+    except sqlite3.IntegrityError:
+        return jsonify({"error":"A version with that effective date already exists for this class."}), 409
+    vid = cur.lastrowid
+    _tt_log(db, vid, class_id, section_id, 'create', f"Created draft timetable for {eff}",
+            {"session_id": session_id, "name": name}, u['id'])
+    db.commit()
+    return jsonify({"ok":True, "id":vid})
+
+def _tt_get_version(db, u, vid, need_admin=True):
+    v = db.execute("""SELECT v.*, c.name AS class_name, s.name AS section_name
+                        FROM timetable_versions v
+                        LEFT JOIN classes c ON c.id=v.class_id
+                        LEFT JOIN sections s ON s.id=v.section_id WHERE v.id=?""", (vid,)).fetchone()
+    if not v: return None, ({"error":"Timetable not found."}, 404)
+    if need_admin and not can(u['role'], 'timetable', 'full'):
+        # non-admins may only ever open a published version
+        if v['status'] != 'published':
+            return None, ({"error":"Access denied."}, 403)
+    return v, None
+
+@app.route('/api/timetable/versions/<int:vid>', methods=['GET','PUT','DELETE'])
+def tt_version_detail(vid):
+    u = get_current_user()
+    if not u: return jsonify({"error":"Not authenticated"}), 401
+    if not can(u['role'], 'timetable', 'view'): return jsonify({"error":"Access denied"}), 403
+    db = get_db()
+    admin = can(u['role'], 'timetable', 'full')
+    v, err = _tt_get_version(db, u, vid, need_admin=False)
+    if err: return jsonify(err[0]), err[1]
+    if v['status'] != 'published' and not admin:
+        return jsonify({"error":"Access denied."}), 403
+    if request.method == 'GET':
+        subjects, teachers = _tt_names(db)
+        slots = [_tt_enrich(r, subjects, teachers)
+                 for r in db.execute("SELECT * FROM timetable_slots WHERE version_id=? ORDER BY day, start_time",
+                                     (vid,)).fetchall()]
+        return jsonify({"version": dict(v), "slots": slots,
+                        "settings": _tt_settings(db, v['session_id'], v['class_id'], v['section_id'])})
+    if not admin:
+        return jsonify({"error":"Access denied: only administrators can change timetables."}), 403
+    if request.method == 'DELETE':
+        if v['status'] == 'published':
+            return jsonify({"error":"A published timetable cannot be deleted — archive it instead so history stays intact."}), 409
+        db.execute("DELETE FROM timetable_versions WHERE id=?", (vid,))
+        _tt_log(db, vid, v['class_id'], v['section_id'], 'delete', "Deleted draft timetable", {}, u['id'])
+        db.commit()
+        return jsonify({"ok":True})
+    d = request.get_json(silent=True) or {}
+    fields, params = [], []
+    if 'name' in d:
+        fields.append("name=?"); params.append(str(d.get('name') or '')[:120])
+    if 'effective_from' in d:
+        eff = str(d.get('effective_from') or '')
+        try: datetime.date.fromisoformat(eff)
+        except ValueError: return jsonify({"error":"effective_from must be YYYY-MM-DD."}), 400
+        fields.append("effective_from=?"); params.append(eff)
+    if not fields: return jsonify({"error":"Nothing to update."}), 400
+    params.append(vid)
+    try:
+        db.execute(f"UPDATE timetable_versions SET {','.join(fields)} WHERE id=?", params)
+    except sqlite3.IntegrityError:
+        return jsonify({"error":"A published version with that effective date already exists."}), 409
+    _tt_log(db, vid, v['class_id'], v['section_id'], 'edit', "Updated timetable details",
+            {k: d.get(k) for k in d}, u['id'])
+    db.commit()
+    return jsonify({"ok":True})
+
+@app.route('/api/timetable/validate', methods=['POST'])
+def tt_validate():
+    u = get_current_user()
+    if not u: return jsonify({"error":"Not authenticated"}), 401
+    if not can(u['role'], 'timetable', 'full'):
+        return jsonify({"error":"Access denied: only administrators can validate timetables."}), 403
+    db = get_db()
+    d = request.get_json(silent=True) or {}
+    vid = _tt_int(d.get('version_id'))
+    v, err = _tt_get_version(db, u, vid) if vid else (None, None)
+    if vid and err: return jsonify(err[0]), err[1]
+    if v is None:
+        class_id, section_id = _tt_int(d.get('class_id')), _tt_int(d.get('section_id'))
+        session_id = _tt_int(d.get('session_id')) or _tt_active_session_id(db)
+        if not class_id or not section_id:
+            return jsonify({"error":"version_id or class_id+section_id is required."}), 400
+        v = {"id": -1, "session_id": session_id, "class_id": class_id, "section_id": section_id}
+    settings = _tt_settings(db, v['session_id'], v['class_id'], v['section_id'])
+    problems = _validate_tt_slots(db, v, d.get('slots') or [], settings)
+    errors = [p for p in problems if p['code'] != 'non_working_day']
+    warnings = [p for p in problems if p['code'] == 'non_working_day']
+    return jsonify({"ok": not errors, "errors": errors, "warnings": warnings, "settings": settings})
+
+@app.route('/api/timetable/versions/<int:vid>/slots', methods=['PUT'])
+def tt_save_slots(vid):
+    u = get_current_user()
+    if not u: return jsonify({"error":"Not authenticated"}), 401
+    if not can(u['role'], 'timetable', 'full'):
+        return jsonify({"error":"Access denied: only administrators can edit the timetable."}), 403
+    db = get_db()
+    v, err = _tt_get_version(db, u, vid)
+    if err: return jsonify(err[0]), err[1]
+    if v['status'] == 'published':
+        return jsonify({"error":"This timetable is published. Duplicate it into a new draft to make changes."}), 409
+    d = request.get_json(silent=True) or {}
+    slots = d.get('slots')
+    if not isinstance(slots, list):
+        return jsonify({"error":"slots must be a list."}), 400
+    if len(slots) > 500:
+        return jsonify({"error":"Too many cells in one save (max 500)."}), 400
+    settings = _tt_settings(db, v['session_id'], v['class_id'], v['section_id'])
+    # Exact duplicate cells are checked first: they are a more precise diagnosis
+    # than the generic "overlaps itself" the interval check would report.
+    seen = set()
+    dup_errors = []
+    for i, s in enumerate(slots):
+        key = (str(s.get('day') or '').strip(), str(s.get('start_time') or '').strip())
+        if key in seen:
+            dup_errors.append({"code": "duplicate_slot",
+                               "message": f"Cell {i+1}: {key[0]} {key[1]} appears more than once.",
+                               "slot_index": i})
+        seen.add(key)
+    if dup_errors:
+        return jsonify({"error":"Duplicate cell.","saved":False, "errors":dup_errors,
+                        "warnings":[]}), 409
+    problems = _validate_tt_slots(db, v, slots, settings)
+    errors = [p for p in problems if p['code'] != 'non_working_day']
+    warnings = [p for p in problems if p['code'] == 'non_working_day']
+    if errors:
+        # Nothing is written: the server is the authority (spec E).
+        return jsonify({"error":"Timetable has conflicts.","errors":errors,
+                        "warnings":warnings, "saved":False}), 409
+    subjects, teachers = _tt_names(db)
+    now = datetime.datetime.now().isoformat()
+    try:
+        _tt_write_slots(db, vid, slots)
+        _tt_log(db, vid, v['class_id'], v['section_id'], 'edit',
+                f"Saved {len(slots)} timetable cells",
+                {"slots": len(slots), "warnings": len(warnings)}, u['id'])
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        return jsonify({"error":"Could not save the timetable.","detail":str(e)[:200]}), 500
+    return jsonify({"ok":True, "saved":True, "count":len(slots), "warnings":warnings})
+
+def _tt_clear_cross_class(rows, keep_teachers):
+    """Copying a week into ANOTHER class also copies its teacher and room, which
+    can never validate — the source class still holds those teachers at those
+    minutes, and that IS a real clash. So copy the day SHAPE (times, subject,
+    breaks) and drop the staff/room assignments for the admin to fill in;
+    conflicts are then checked against their real edits.
+    Returns how many rows were changed."""
+    if keep_teachers:
+        return 0
+    n = 0
+    for r in rows:
+        if r.get('teacher_id') or r.get('substitute_teacher_id') or (r.get('room') or '').strip():
+            n += 1
+        r['teacher_id'] = None
+        r['substitute_teacher_id'] = None
+        r['room'] = ''
+    return n
+
+@app.route('/api/timetable/versions/<int:vid>/duplicate', methods=['POST'])
+def tt_duplicate(vid):
+    """Copy a day, a whole week, or a week into another class (spec A)."""
+    u = get_current_user()
+    if not u: return jsonify({"error":"Not authenticated"}), 401
+    if not can(u['role'], 'timetable', 'full'):
+        return jsonify({"error":"Access denied: only administrators can duplicate timetables."}), 403
+    db = get_db()
+    v, err = _tt_get_version(db, u, vid)
+    if err: return jsonify(err[0]), err[1]
+    d = request.get_json(silent=True) or {}
+    mode = str(d.get('mode') or 'day')
+    # day-mode writes back into this very version, so it must be editable.
+    # Copying FROM a published timetable into another class/week is a normal
+    # admin action and is allowed (the destination must still be a draft).
+    if mode == 'day' and v['status'] == 'published':
+        return jsonify({"error":"A published timetable cannot be edited — duplicate it into a new draft first."}), 409
+    settings = _tt_settings(db, v['session_id'], v['class_id'], v['section_id'])
+    now_iso = datetime.datetime.now().isoformat()
+
+    if mode == 'day':
+        src = str(d.get('from_day') or '')
+        targets = d.get('to_days') or []
+        if src not in TT_DAYS:
+            return jsonify({"error":"from_day is not a valid day."}), 400
+        if not isinstance(targets, list) or not targets:
+            return jsonify({"error":"to_days must be a non-empty list."}), 400
+        bad = [t for t in targets if t not in TT_DAYS]
+        if bad:
+            return jsonify({"error":f"Invalid target day(s): {', '.join(map(str, bad))}"}), 400
+        if src in targets:
+            return jsonify({"error":"A day cannot be copied onto itself."}), 400
+        src_rows = [dict(r) for r in db.execute(
+            "SELECT * FROM timetable_slots WHERE version_id=? AND day=? ORDER BY start_time",
+            (vid, src)).fetchall()]
+        if not src_rows:
+            return jsonify({"error":f"There is nothing scheduled on {src} to copy."}), 400
+        # copy AFTER removing the target days, so the source survives
+        db.execute("DELETE FROM timetable_slots WHERE version_id=? AND day IN (%s)"
+                   % ",".join("?" * len(targets)), [vid] + list(targets))
+        added = 0
+        for t in targets:
+            for r in src_rows:
+                c = dict(r); c.pop('id', None); c['day'] = t
+                db.execute("""INSERT INTO timetable_slots
+                    (version_id,day,start_time,end_time,name,kind,subject_id,teacher_id,
+                     substitute_teacher_id,room,status,cancel_reason,notes)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (vid, c['day'], c['start_time'], c['end_time'], c['name'], c['kind'],
+                     c['subject_id'], c['teacher_id'], c['substitute_teacher_id'], c['room'],
+                     c['status'], c['cancel_reason'], c['notes']))
+                added += 1
+        final = [dict(r) for r in db.execute(
+            "SELECT * FROM timetable_slots WHERE version_id=?", (vid,)).fetchall()]
+        problems = _validate_tt_slots(db, v, final, settings)
+        errors = [p for p in problems if p['code'] != 'non_working_day']
+        if errors:
+            db.rollback()
+            return jsonify({"error":"Copying would create conflicts — nothing was changed.",
+                            "errors":errors, "saved":False}), 409
+        _tt_log(db, vid, v['class_id'], v['section_id'], 'duplicate',
+                f"Copied {src} to {', '.join(targets)}",
+                {"from": src, "to": targets, "cells": added}, u['id'])
+        db.commit()
+        return jsonify({"ok":True, "copied":added, "mode":"day"})
+
+    if mode == 'week':
+        tid = _tt_int(d.get('to_version_id'))
+        if not tid: return jsonify({"error":"to_version_id is required."}), 400
+        tgt, terr = _tt_get_version(db, u, tid)
+        if terr: return jsonify(terr[0]), terr[1]
+        if tgt['status'] == 'published':
+            return jsonify({"error":"The destination timetable is published; use a draft."}), 409
+        if tid == vid: return jsonify({"error":"Cannot duplicate a timetable onto itself."}), 400
+        rows = [dict(r) for r in db.execute("SELECT * FROM timetable_slots WHERE version_id=?", (vid,)).fetchall()]
+        if not rows: return jsonify({"error":"There is nothing to copy."}), 400
+        cross = (tgt['class_id'] != v['class_id'] or tgt['section_id'] != v['section_id'])
+        cleared = _tt_clear_cross_class(rows, bool(d.get('keep_teachers'))) if cross else 0
+        tset = _tt_settings(db, tgt['session_id'], tgt['class_id'], tgt['section_id'])
+        problems = _validate_tt_slots(db, dict(tgt), rows, tset)
+        errors = [p for p in problems if p['code'] != 'non_working_day']
+        if errors:
+            return jsonify({"error":"Copying would create conflicts — nothing was changed.",
+                            "errors":errors, "saved":False}), 409
+        _tt_write_slots(db, tid, rows)
+        _tt_log(db, tid, tgt['class_id'], tgt['section_id'], 'duplicate',
+                f"Copied timetable from #{vid}", {"from_version": vid, "cells": len(rows),
+                                                  "cleared_teachers": cleared}, u['id'])
+        db.commit()
+        return jsonify({"ok":True, "copied":len(rows), "mode":"week", "to_version_id":tid,
+                        "cleared_teachers":cleared})
+
+    if mode == 'class':
+        tc, ts = _tt_int(d.get('to_class_id')), _tt_int(d.get('to_section_id'))
+        if not tc or not ts:
+            return jsonify({"error":"to_class_id and to_section_id are required."}), 400
+        if not db.execute("SELECT 1 FROM sections WHERE id=? AND class_id=?", (ts, tc)).fetchone():
+            return jsonify({"error":"That section does not belong to that class."}), 400
+        if tc == v['class_id'] and ts == v['section_id']:
+            return jsonify({"error":"Choose a different class or section."}), 400
+        rows = [dict(r) for r in db.execute("SELECT * FROM timetable_slots WHERE version_id=?", (vid,)).fetchall()]
+        if not rows: return jsonify({"error":"There is nothing to copy."}), 400
+        # Copy the day shape, not the staff — see _tt_clear_cross_class.
+        cleared = _tt_clear_cross_class(rows, bool(d.get('keep_teachers')))
+        eff = str(d.get('effective_from') or datetime.date.today().isoformat())
+        try: datetime.date.fromisoformat(eff)
+        except ValueError: return jsonify({"error":"effective_from must be YYYY-MM-DD."}), 400
+        # validate BEFORE creating the destination so a failed copy leaves nothing behind
+        pseudo = {"id": -1, "session_id": v['session_id'], "class_id": tc, "section_id": ts}
+        tset = _tt_settings(db, v['session_id'], tc, ts)
+        problems = [p for p in _validate_tt_slots(db, pseudo, rows, tset)
+                    if p['code'] != 'non_working_day']
+        if problems:
+            return jsonify({"error":"Copying would create conflicts — nothing was created.",
+                            "errors":problems, "saved":False}), 409
+        try:
+            cur = db.execute("""INSERT INTO timetable_versions
+                  (session_id,class_id,section_id,name,status,effective_from,parent_id,created_by,created_at)
+                  VALUES (?,?,?,?,?,?,?,?,?)""",
+                  (v['session_id'], tc, ts, str(d.get('name') or '')[:120], 'draft', eff,
+                   vid, u['id'], now_iso))
+        except sqlite3.IntegrityError:
+            return jsonify({"error":"A timetable with that effective date already exists for the target class."}), 409
+        nid = cur.lastrowid
+        _tt_write_slots(db, nid, rows)
+        _tt_log(db, nid, tc, ts, 'duplicate',
+                f"Copied timetable from {v['class_name']}-{v['section_name']} (#{vid})",
+                {"from_version": vid, "cells": len(rows), "effective_from": eff,
+                 "cleared_teachers": cleared}, u['id'])
+        db.commit()
+        return jsonify({"ok":True, "copied":len(rows), "mode":"class", "id":nid,
+                        "cleared_teachers":cleared})
+    return jsonify({"error":f"Unknown mode '{mode}'. Use day, week or class."}), 400
+
+def _tt_validate_or_409(db, ver, slots, settings):
+    """Return blocking errors (empty list when clean)."""
+    return [p for p in _validate_tt_slots(db, ver, slots, settings)
+            if p['code'] != 'non_working_day']
+
+@app.route('/api/timetable/versions/<int:vid>/publish', methods=['POST'])
+def tt_publish(vid):
+    u = get_current_user()
+    if not u: return jsonify({"error":"Not authenticated"}), 401
+    if not can(u['role'], 'timetable', 'full'):
+        return jsonify({"error":"Access denied: only administrators can publish timetables."}), 403
+    db = get_db()
+    v, err = _tt_get_version(db, u, vid)
+    if err: return jsonify(err[0]), err[1]
+    if v['status'] == 'published':
+        return jsonify({"error":"This timetable is already published."}), 409
+    d = request.get_json(silent=True) or {}
+    eff = str(d.get('effective_from') or v['effective_from'])
+    try: datetime.date.fromisoformat(eff)
+    except ValueError: return jsonify({"error":"effective_from must be YYYY-MM-DD."}), 400
+    slots = [dict(r) for r in db.execute("SELECT * FROM timetable_slots WHERE version_id=?", (vid,)).fetchall()]
+    if not slots:
+        return jsonify({"error":"Add at least one period before publishing."}), 400
+    settings = _tt_settings(db, v['session_id'], v['class_id'], v['section_id'])
+    errors = _tt_validate_or_409(db, v, slots, settings)
+    if errors:
+        return jsonify({"error":"Cannot publish: the timetable has conflicts.",
+                        "errors":errors, "published":False}), 409
+    dup = db.execute("""SELECT id, effective_from FROM timetable_versions
+                         WHERE session_id=? AND class_id=? AND section_id=?
+                           AND status='published' AND effective_from=? AND id<>?""",
+                     (v['session_id'], v['class_id'], v['section_id'], eff, vid)).fetchone()
+    if dup:
+        return jsonify({"error":f"Another timetable is already published with effective date {eff}."}), 409
+    warnings = []
+    later = db.execute("""SELECT effective_from FROM timetable_versions
+                           WHERE session_id=? AND class_id=? AND section_id=?
+                             AND status='published' AND effective_from>? AND id<>?""",
+                       (v['session_id'], v['class_id'], v['section_id'], eff, vid)).fetchall()
+    for r in later:
+        warnings.append({"code":"future_version_exists",
+                         "message":f"A version effective from {r['effective_from']} is already published, "
+                                   f"so this one will only be live on and after {eff} "
+                                   f"up to {r['effective_from']}."})
+    note = str(d.get('note') or '')[:300]
+    now_iso = datetime.datetime.now().isoformat()
+    db.execute("""UPDATE timetable_versions
+                     SET status='published', effective_from=?, published_at=?, published_by=?, publish_note=?
+                   WHERE id=?""", (eff, now_iso, u['id'], note, vid))
+    _tt_log(db, vid, v['class_id'], v['section_id'], 'publish',
+            f"Published timetable effective {eff}",
+            {"effective_from": eff, "slots": len(slots), "note": note}, u['id'])
+    cls = db.execute("SELECT name FROM classes WHERE id=?", (v['class_id'],)).fetchone()
+    sec = db.execute("SELECT name FROM sections WHERE id=?", (v['section_id'],)).fetchone()
+    label = "%s-%s" % (cls['name'] if cls else '?', sec['name'] if sec else '?')
+    summary = f"The timetable for Class {label} is now effective from {eff}."
+    if note: summary += f" Note: {note}"
+    report = _tt_notify(db, v, slots, summary)
+    db.commit()
+    return jsonify({"ok":True, "published":True, "effective_from":eff,
+                    "notifications":report, "warnings":warnings})
+
+@app.route('/api/timetable/versions/<int:vid>/archive', methods=['POST'])
+def tt_archive(vid):
+    u = get_current_user()
+    if not u: return jsonify({"error":"Not authenticated"}), 401
+    if not can(u['role'], 'timetable', 'full'):
+        return jsonify({"error":"Access denied: only administrators can archive timetables."}), 403
+    db = get_db()
+    v, err = _tt_get_version(db, u, vid)
+    if err: return jsonify(err[0]), err[1]
+    if v['status'] == 'archived': return jsonify({"ok":True, "status":"archived"})
+    db.execute("UPDATE timetable_versions SET status='archived' WHERE id=?", (vid,))
+    _tt_log(db, vid, v['class_id'], v['section_id'], 'archive', "Archived timetable",
+            {"previous_status": v['status']}, u['id'])
+    db.commit()
+    return jsonify({"ok":True, "status":"archived"})
+
+@app.route('/api/timetable/history')
+def tt_history():
+    u = get_current_user()
+    if not u: return jsonify({"error":"Not authenticated"}), 401
+    if not can(u['role'], 'timetable', 'full'):
+        return jsonify({"error":"Access denied: only administrators can see change history."}), 403
+    db = get_db()
+    class_id = _tt_int(request.args.get('class_id'))
+    section_id = _tt_int(request.args.get('section_id'))
+    limit = _tt_int(request.args.get('limit')) or 50
+    limit = max(1, min(limit, 200))
+    sql = """SELECT h.*, us.username AS changed_by_name,
+                    c.name AS class_name, s.name AS section_name
+               FROM timetable_changes h
+               LEFT JOIN users us ON us.id=h.changed_by
+               LEFT JOIN classes c ON c.id=h.class_id
+               LEFT JOIN sections s ON s.id=h.section_id
+              WHERE 1=1"""
+    params = []
+    if class_id is not None: sql += " AND h.class_id=?"; params.append(class_id)
+    if section_id is not None: sql += " AND h.section_id=?"; params.append(section_id)
+    sql += " ORDER BY h.id DESC LIMIT ?"; params.append(limit)
+    out = []
+    for r in db.execute(sql, params).fetchall():
+        row = dict(r)
+        try: row['detail'] = json.loads(row.get('detail') or '{}')
+        except Exception: row['detail'] = {}
+        out.append(row)
+    return jsonify(out)
+
+# ---------------- Substitutions (per concrete date) ----------------
+@app.route('/api/timetable/substitutions', methods=['GET','POST'])
+def tt_substitutions():
+    u = get_current_user()
+    if not u: return jsonify({"error":"Not authenticated"}), 401
+    if not can(u['role'], 'timetable', 'view'): return jsonify({"error":"Access denied"}), 403
+    db = get_db()
+    if request.method == 'GET':
+        date = request.args.get('date') or datetime.date.today().isoformat()
+        class_id = _tt_int(request.args.get('class_id'))
+        section_id = _tt_int(request.args.get('section_id'))
+        student_id = _tt_int(request.args.get('student_id'))
+        view = (request.args.get('view') or '').strip()
+        base = """SELECT sub.*, so.name AS original_name, sn.name AS substitute_name,
+                         sl.day, sl.start_time, sl.end_time, sl.name AS slot_name, sl.subject_id,
+                         v.class_id, v.section_id, c.name AS class_name, s.name AS section_name
+                    FROM timetable_substitutions sub
+                    JOIN timetable_slots sl ON sl.id=sub.slot_id
+                    JOIN timetable_versions v ON v.id=sl.version_id
+                    LEFT JOIN classes c ON c.id=v.class_id
+                    LEFT JOIN sections s ON s.id=v.section_id
+                    LEFT JOIN teachers so ON so.id=sub.original_teacher_id
+                    LEFT JOIN teachers sn ON sn.id=sub.substitute_teacher_id
+                   WHERE sub.date=? AND v.status='published'"""
+        params = [date]
+        allowed = readable_student_ids(u)
+        if allowed is not None:                       # student / parent
+            class_id, section_id, student_id, err = _tt_scope(db, u, class_id, section_id, student_id, view)
+            if err: return jsonify(err[0]), err[1]
+            base += " AND v.class_id=? AND v.section_id=?"; params += [class_id, section_id]
+        elif u['role'] == 'teacher':
+            tids = _teacher_ids_for_user(db, u)
+            if not tids:
+                return jsonify({"substitutions": [], "date": date, "link_required": True})
+            q = ",".join("?" * len(tids))
+            base += f" AND (sl.teacher_id IN ({q}) OR sl.substitute_teacher_id IN ({q}))"
+            params += tids + tids
+        else:                                          # admin
+            if class_id is not None: base += " AND v.class_id=?"; params.append(class_id)
+            if section_id is not None: base += " AND v.section_id=?"; params.append(section_id)
+        # Admins may audit pending/rejected rows; everyone else only ever sees
+        # substitutions that were actually authorised (spec B).
+        st = (request.args.get('status') or '').strip()
+        if st:
+            if st not in ('pending', 'approved', 'rejected'):
+                return jsonify({"error":"status must be pending, approved or rejected."}), 400
+            base += " AND sub.status=?"; params.append(st)
+        elif not can(u['role'], 'timetable', 'full'):
+            base += " AND sub.status='approved'"
+        base += " ORDER BY sl.start_time"
+        rows = [dict(r) for r in db.execute(base, params).fetchall()]
+        # one query for all subject names — the naive per-row lookup was O(n)
+        sids = sorted({r['subject_id'] for r in rows if r.get('subject_id')})
+        names = {}
+        if sids:
+            q = ",".join("?" * len(sids))
+            names = {r['id']: r['name'] for r in
+                     db.execute(f"SELECT id,name FROM subjects WHERE id IN ({q})", sids).fetchall()}
+        for r in rows:
+            r['subject_name'] = names.get(r.get('subject_id')) or ''
+        return jsonify({"substitutions": rows, "date": date})
+
+    # POST — administrators only
+    if not can(u['role'], 'timetable', 'full'):
+        return jsonify({"error":"Access denied: only administrators can assign substitutions."}), 403
+    d = request.get_json(silent=True) or {}
+    slot_id = _tt_int(d.get('slot_id'))
+    sub_id = _tt_int(d.get('substitute_teacher_id'))
+    date = str(d.get('date') or '')
+    try: datetime.date.fromisoformat(date)
+    except ValueError: return jsonify({"error":"date must be YYYY-MM-DD."}), 400
+    if not slot_id: return jsonify({"error":"slot_id is required."}), 400
+    # aliased: a bare v.status would collide with sl.status (see timetable_api)
+    slot = db.execute("""SELECT sl.*, v.class_id, v.section_id, v.status AS version_status
+                           FROM timetable_slots sl
+                           JOIN timetable_versions v ON v.id=sl.version_id
+                          WHERE sl.id=?""", (slot_id,)).fetchone()
+    if not slot: return jsonify({"error":"Period not found."}), 404
+    if slot['version_status'] != 'published':
+        return jsonify({"error":"That timetable is not published."}), 409
+    if not sub_id: return jsonify({"error":"substitute_teacher_id is required."}), 400
+    if sub_id == slot['teacher_id']:
+        return jsonify({"error":"The substitute must differ from the teacher already assigned."}), 400
+    if not db.execute("SELECT 1 FROM teachers WHERE id=?", (sub_id,)).fetchone():
+        return jsonify({"error":"That substitute teacher does not exist."}), 400
+    # the substitute must actually be free for the whole period
+    st, en = _tt_minutes(slot['start_time']), _tt_minutes(slot['end_time'])
+    # The slot is a weekday pattern, so the chosen date must actually be that day.
+    day_name = datetime.date.fromisoformat(date).strftime('%A')
+    if day_name != slot['day']:
+        return jsonify({"error": f"{date} is a {day_name}, but that period is scheduled on {slot['day']}."}), 400
+    if st is None or en is None:
+        return jsonify({"error":"That period has invalid times."}), 400
+    busy = db.execute("""SELECT sl.day, sl.start_time, sl.end_time, v.class_id, v.section_id,
+                                c.name AS class_name, s.name AS section_name
+                           FROM timetable_slots sl
+                           JOIN timetable_versions v ON v.id=sl.version_id
+                           LEFT JOIN classes c ON c.id=v.class_id
+                           LEFT JOIN sections s ON s.id=v.section_id
+                          WHERE v.status='published' AND sl.status='active'
+                            AND sl.day=? AND sl.version_id<>?
+                            AND (sl.teacher_id=? OR sl.substitute_teacher_id=?)""",
+                      (slot['day'], slot['version_id'], sub_id, sub_id)).fetchall()
+    for b in busy:
+        bs, be = _tt_minutes(b['start_time']), _tt_minutes(b['end_time'])
+        if bs is not None and be is not None and _tt_overlap(st, en, bs, be):
+            return jsonify({"error": f"That teacher is already assigned to "
+                                     f"{b['class_name']}-{b['section_name']} on {b['day']} "
+                                     f"{b['start_time']}-{b['end_time']}."}), 409
+    # the substitute must not already be covering a different class that date
+    for r in db.execute("""SELECT sl.start_time, sl.end_time FROM timetable_substitutions sub
+                             JOIN timetable_slots sl ON sl.id=sub.slot_id
+                            WHERE sub.date=? AND sub.status='approved'
+                              AND sub.substitute_teacher_id=?""", (date, sub_id)).fetchall():
+        os_, oe = _tt_minutes(r['start_time']), _tt_minutes(r['end_time'])
+        if os_ is not None and oe is not None and _tt_overlap(st, en, os_, oe):
+            return jsonify({"error":"That teacher already covers another class at that time."}), 409
+    status = 'approved' if not can(u['role'], 'timetable', 'full') else (d.get('status') or 'approved')
+    if status not in ('pending', 'approved', 'rejected'): status = 'approved'
+    now_iso = datetime.datetime.now().isoformat()
+    try:
+        cur = db.execute("""INSERT INTO timetable_substitutions
+            (slot_id,date,original_teacher_id,substitute_teacher_id,reason,status,requested_by,approved_by,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (slot_id, date, slot['teacher_id'], sub_id, str(d.get('reason') or '')[:200],
+             status, u['id'], u['id'] if status == 'approved' else None, now_iso, now_iso))
+    except sqlite3.IntegrityError:
+        return jsonify({"error":"A substitution already exists for that period on that date."}), 409
+    _tt_log(db, slot['version_id'], slot['class_id'], slot['section_id'], 'substitute',
+            f"Substituted teacher on {date} {slot['start_time']}",
+            {"slot_id": slot_id, "date": date, "status": status}, u['id'])
+    db.commit()
+    return jsonify({"ok":True, "id":cur.lastrowid, "status":status})
+
+@app.route('/api/timetable/substitutions/<int:sid>', methods=['PUT','DELETE'])
+def tt_substitution_detail(sid):
+    u = get_current_user()
+    if not u: return jsonify({"error":"Not authenticated"}), 401
+    if not can(u['role'], 'timetable', 'full'):
+        return jsonify({"error":"Access denied: only administrators can change substitutions."}), 403
+    db = get_db()
+    row = db.execute("""SELECT sub.*, v.class_id, v.section_id
+                          FROM timetable_substitutions sub
+                          JOIN timetable_slots sl ON sl.id=sub.slot_id
+                          JOIN timetable_versions v ON v.id=sl.version_id
+                         WHERE sub.id=?""", (sid,)).fetchone()
+    if not row: return jsonify({"error":"Substitution not found."}), 404
+    if request.method == 'DELETE':
+        db.execute("DELETE FROM timetable_substitutions WHERE id=?", (sid,))
+        _tt_log(db, None, row['class_id'], row['section_id'], 'substitute',
+                f"Removed substitution #{sid}", {"date": row['date']}, u['id'])
+        db.commit()
+        return jsonify({"ok":True})
+    d = request.get_json(silent=True) or {}
+    status = d.get('status')
+    if status not in ('pending', 'approved', 'rejected'):
+        return jsonify({"error":"status must be pending, approved or rejected."}), 400
+    db.execute("UPDATE timetable_substitutions SET status=?, approved_by=?, updated_at=? WHERE id=?",
+               (status, u['id'] if status == 'approved' else None,
+                datetime.datetime.now().isoformat(), sid))
+    _tt_log(db, None, row['class_id'], row['section_id'], 'substitute',
+            f"Substitution #{sid} marked {status}", {"date": row['date'], "status": status}, u['id'])
+    db.commit()
+    return jsonify({"ok":True, "status":status})
+
+# ---------------- Role-scoped schedule (the screen everyone reads) ----------------
+@app.route('/api/timetable/schedule')
+def tt_schedule():
+    u = get_current_user()
+    if not u: return jsonify({"error":"Not authenticated"}), 401
+    if not can(u['role'], 'timetable', 'view'): return jsonify({"error":"Access denied"}), 403
+    db = get_db()
+    session_id = _tt_int(request.args.get('session_id')) or _tt_active_session_id(db)
+    class_id = _tt_int(request.args.get('class_id'))
+    section_id = _tt_int(request.args.get('section_id'))
+    student_id = _tt_int(request.args.get('student_id'))
+    view = (request.args.get('view') or '').strip()
+    date_str = request.args.get('date') or datetime.date.today().isoformat()
+    try: date_obj = datetime.date.fromisoformat(date_str)
+    except ValueError: date_obj = datetime.date.today()
+    class_id, section_id, student_id, err = _tt_scope(db, u, class_id, section_id, student_id, view)
+    if err: return jsonify(err[0]), err[1]
+    settings = _tt_settings(db, session_id, class_id, section_id)
+    if class_id is None:
+        return jsonify(_tt_teacher_week(db, u, session_id, settings, date_obj))
+    return jsonify(_tt_live_payload(db, class_id, section_id, session_id, settings, date_obj, u, student_id))
+
+# ---------------- PDF export ----------------
+def _tt_pdf_bytes(payload, title):
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib import colors
+    from reportlab.lib.units import mm
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.lib.styles import getSampleStyleSheet
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=landscape(A4),
+                            leftMargin=12*mm, rightMargin=12*mm,
+                            topMargin=12*mm, bottomMargin=12*mm)
+    days = payload.get('days') or []
+    # collect the union of start times so rows line up across columns
+    order, seen = [], set()
+    for d in days:
+        for s in d['slots']:
+            if s.get('kind') != 'period': continue
+            if s['start_time'] not in seen:
+                seen.add(s['start_time']); order.append(s['start_time'])
+    order.sort()
+    styles = getSampleStyleSheet()
+    elems = [Paragraph(title, styles['Title']), Spacer(1, 6)]
+    scope = payload.get('scope') or {}
+    sub_line = payload.get('sub_line') or ''
+    if sub_line:
+        elems.append(Paragraph(sub_line, styles['Normal']))
+    elems.append(Spacer(1, 8))
+    if not order:
+        elems.append(Paragraph("No published timetable has been set for this class yet.", styles['Normal']))
+    else:
+        head = ["Time"] + [d['day'] for d in days]
+        data = [head]
+        for t in order:
+            row = [t]
+            for d in days:
+                hit = next((s for s in d['slots'] if s['start_time'] == t and s['kind'] == 'period'), None)
+                if not hit:
+                    row.append("")
+                    continue
+                if hit['status'] == 'cancelled':
+                    row.append("CANCELLED\n" + (hit.get('subject_name') or hit.get('name') or ''))
+                    continue
+                parts = [hit.get('subject_name') or hit.get('name') or '']
+                if hit.get('teacher_name'): parts.append(hit['teacher_name'])
+                if hit.get('room'): parts.append("Room " + hit['room'])
+                if hit.get('substitute_name'): parts.append("Sub: " + hit['substitute_name'])
+                if scope.get('view') == 'mine' and hit.get('class_name'):
+                    parts.insert(1, "Class %s-%s" % (hit['class_name'], hit.get('section_name') or ''))
+                row.append("\n".join(p for p in parts if p))
+            data.append(row)
+        # breaks / lunch rows
+        for d in days:
+            for s in d['slots']:
+                if s.get('kind') in ('break', 'lunch', 'assembly'):
+                    pass
+        breaks = {}
+        for d in days:
+            for s in d['slots']:
+                if s.get('kind') == 'period': continue
+                key = (s['start_time'], s['end_time'], s.get('name') or s['kind'])
+                breaks.setdefault(key, set()).add(d['day'])
+        for (st, en, nm), dset in sorted(breaks.items()):
+            data.append(["%s-%s" % (st, en), "%s (%s)" % (nm, ", ".join(sorted(dset)))]
+                        + [""] * (len(days) - 1))
+        t = Table(data, repeatRows=1, colWidths=[26*mm] + [None] * len(days))
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2563eb')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('GRID', (0, 0), (-1, -1), 0.4, colors.HexColor('#cbd5e1')),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('FONTSIZE', (0, 0), (-1, -1), 7.5),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8fafc')]),
+            ('LEFTPADDING', (0, 0), (-1, -1), 4),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+            ('TOPPADDING', (0, 0), (-1, -1), 3),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ]))
+        elems.append(t)
+    doc.build(elems)
+    return buf.getvalue()
+
+@app.route('/api/timetable/pdf')
+def tt_pdf():
+    u = get_current_user()
+    if not u: return jsonify({"error":"Not authenticated"}), 401
+    if not can(u['role'], 'timetable', 'view'): return jsonify({"error":"Access denied"}), 403
+    db = get_db()
+    session_id = _tt_int(request.args.get('session_id')) or _tt_active_session_id(db)
+    class_id = _tt_int(request.args.get('class_id'))
+    section_id = _tt_int(request.args.get('section_id'))
+    student_id = _tt_int(request.args.get('student_id'))
+    view = (request.args.get('view') or '').strip()
+    date = datetime.date.today()
+    class_id, section_id, student_id, err = _tt_scope(db, u, class_id, section_id, student_id, view)
+    if err: return jsonify(err[0]), err[1]
+    settings = _tt_settings(db, session_id, class_id, section_id)
+    school = db.execute("SELECT school_name FROM settings WHERE id=1").fetchone()
+    school_name = (school[0] if school and school[0] else 'Dynamic CuroBase')
+    if class_id is None:
+        payload = _tt_teacher_week(db, u, session_id, settings, date)
+        title = "%s — Weekly Timetable (%s)" % (school_name, u['username'])
+        payload['sub_line'] = "Week beginning %s" % (date - datetime.timedelta(days=date.weekday()))
+    else:
+        payload = _tt_live_payload(db, class_id, section_id, session_id, settings, date, u, student_id)
+        cls = payload['scope'].get('class_name') or '?'
+        sec = payload['scope'].get('section_name') or '?'
+        title = "%s — Class %s-%s Timetable" % (school_name, cls, sec)
+        payload['sub_line'] = "Academic session %s • Week beginning %s" % (
+            payload.get('session', {}).get('id', ''),
+            (date - datetime.timedelta(days=date.weekday())).isoformat())
+    try:
+        data = _tt_pdf_bytes(payload, title)
+    except Exception as e:
+        return jsonify({"error":"Could not build the PDF.","detail":str(e)[:200]}), 500
+    fn = "timetable_%s_%s.pdf" % (
+        ("%s-%s" % (payload['scope'].get('class_name'), payload['scope'].get('section_name')))
+        if class_id is not None else u['username'],
+        date.isoformat())
+    return send_file(io.BytesIO(data), as_attachment=True, download_name=fn,
+                     mimetype="application/pdf")
 
 # ---------- Static fallback ----------
 @app.route('/manifest.json')
